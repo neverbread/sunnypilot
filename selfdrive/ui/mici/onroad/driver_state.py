@@ -4,7 +4,7 @@ import numpy as np
 import math
 from cereal import log
 from openpilot.common.filter_simple import FirstOrderFilter
-from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.widgets import Widget
 from openpilot.selfdrive.ui.ui_state import ui_state
 
@@ -50,6 +50,8 @@ class DriverStateRenderer(Widget):
 
     # Load the driver face icons
     self.load_icons()
+    self._font_medium = gui_app.font(FontWeight.MEDIUM)
+    self._engine_temp_c: float | None = None
 
   def load_icons(self):
     """Load or reload the driver face icon texture"""
@@ -85,6 +87,15 @@ class DriverStateRenderer(Widget):
                     int(self._rect.x + (self._rect.width - self._dm_background.width) / 2),
                     int(self._rect.y + (self._rect.height - self._dm_background.height) / 2),
                     rl.Color(255, 255, 255, int(255 * self._fade_filter.x)))
+
+    if self._engine_temp_c is not None:
+      temp_text = f"{round(self._engine_temp_c)}°C"
+      temp_size = rl.measure_text_ex(self._font_medium, temp_text, 24, 0)
+      temp_pos = rl.Vector2(
+        self._rect.x + (self._rect.width - temp_size.x) / 2,
+        self._rect.y - temp_size.y - 6,
+      )
+      rl.draw_text_ex(self._font_medium, temp_text, temp_pos, 24, 0, rl.WHITE)
 
     rl.draw_texture(self._dm_person, int(self._rect.x), int(self._rect.y),
                     rl.Color(255, 255, 255, int(255 * 0.9 * self._fade_filter.x)))
@@ -178,6 +189,8 @@ class DriverStateRenderer(Widget):
     self._is_active = dm_state.isActiveMode
     self._is_rhd = dm_state.isRHD
     self._face_detected = dm_state.faceDetected
+    if sm.updated["carState"]:
+      self._engine_temp_c = sm["carState"].engineCoolantTemp if sm.valid["carState"] else None
 
     driverstate = sm["driverStateV2"]
     driver_data = driverstate.rightDriverData if self._is_rhd else driverstate.leftDriverData

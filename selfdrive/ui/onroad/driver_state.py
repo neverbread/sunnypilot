@@ -4,7 +4,7 @@ from cereal import log
 from dataclasses import dataclass
 from openpilot.selfdrive.ui import UI_BORDER_SIZE
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.widgets import Widget
 
 AlertSize = log.SelfdriveState.AlertSize
@@ -63,6 +63,7 @@ class DriverStateRenderer(Widget):
     self.position_y: float = 0.0
     self.h_arc_data = None
     self.v_arc_data = None
+    self.engine_temp_c: float | None = None
 
     # Pre-allocate drawing arrays
     self.face_lines = [rl.Vector2(0, 0) for _ in range(len(DEFAULT_FACE_KPTS_3D))]
@@ -71,6 +72,7 @@ class DriverStateRenderer(Widget):
 
     # Load the driver face icon
     self.dm_img = gui_app.texture("icons/driver_face.png", IMG_SIZE, IMG_SIZE)
+    self._font_medium = gui_app.font(FontWeight.MEDIUM)
 
     # Colors
     self.white_color = rl.Color(255, 255, 255, 255)
@@ -106,6 +108,16 @@ class DriverStateRenderer(Widget):
     if self.v_arc_data:
       rl.draw_spline_linear(self.v_arc_lines, len(self.v_arc_lines), self.v_arc_data.thickness, self.arc_color)
 
+    # Engine coolant temperature readout above the driver monitoring widget
+    if self.engine_temp_c is not None:
+      temp_text = f"{round(self.engine_temp_c)}°C"
+      temp_size = rl.measure_text_ex(self._font_medium, temp_text, 32, 0)
+      temp_pos = rl.Vector2(
+        self.position_x - temp_size.x / 2,
+        self.position_y - BTN_SIZE / 2 - temp_size.y - 10,
+      )
+      rl.draw_text_ex(self._font_medium, temp_text, temp_pos, 32, 0, rl.WHITE)
+
   def _update_state(self):
     """Update the driver monitoring state based on model data"""
     sm = ui_state.sm
@@ -116,6 +128,8 @@ class DriverStateRenderer(Widget):
     dm_state = sm["driverMonitoringState"]
     self.is_active = dm_state.isActiveMode
     self.is_rhd = dm_state.isRHD
+    if sm.updated["carState"]:
+      self.engine_temp_c = sm["carState"].engineCoolantTemp if sm.valid["carState"] else None
 
     # Update fade state (smoother transition between active/inactive)
     fade_target = 0.0 if self.is_active else 0.5
