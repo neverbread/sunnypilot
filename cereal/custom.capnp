@@ -174,6 +174,8 @@ struct OnroadEventSP @0xda96579883444c35 {
     pedalPressedAlertOnly @16;
     laneTurnLeft @17;
     laneTurnRight @18;
+    trafficReadyReminder @19;
+    steeringSpeedChime @20;
   }
 }
 
@@ -270,10 +272,28 @@ struct ModelDataV2SP @0xa1680744031fdb2d {
     turnRight @2;
   }
 
-struct CustomReserved10 @0xcb9fd56c7057593a {
+struct EngineTemperature @0xcb9fd56c7057593a {
+  oilCelsius @0 :Float32;
+  coolantCelsius @1 :Float32;
+  oilValid @2 :Bool;
+  coolantValid @3 :Bool;
+  supported @4 :Bool;
+  clutch1Celsius @5 :Float32;
+  clutch2Celsius @6 :Float32;
+  clutch1Valid @7 :Bool;
+  clutch2Valid @8 :Bool;
 }
 
-struct CustomReserved11 @0xc2243c65e0340384 {
+struct EngineTemperatureRequest @0xc2243c65e0340384 {
+  kind @0 :Kind;
+
+  enum Kind {
+    coolant @0;
+    oil @1;
+    flowControl @2;
+    clutch @3;
+    clutchFlowControl @4;
+  }
 }
 
 struct CustomReserved12 @0x9ccdc8676701b412 {

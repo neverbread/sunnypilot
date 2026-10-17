@@ -61,6 +61,10 @@ def only_onroad(started: bool, params: Params, CP: car.CarParams) -> bool:
 def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
   return not started
 
+def engine_temperatures(started: bool, params: Params, CP: car.CarParams) -> bool:
+  from openpilot.sunnypilot.selfdrive.car.enginetempd import supports_engine_temperatures
+  return started and (params.get_bool("EngineTemperatureDisplay") or params.get_bool("DctTemperatureDisplay")) and supports_engine_temperatures(CP)
+
 def use_github_runner(started, params, CP: car.CarParams) -> bool:
   return not PC and params.get_bool("EnableGithubRunner") and (
     not params.get_bool("NetworkMetered") and not params.get_bool("GithubRunnerSufficientVoltage"))
@@ -130,6 +134,7 @@ procs = [
   PythonProcess("controlsd", "selfdrive.controls.controlsd", and_(not_joystick, iscar)),
   PythonProcess("joystickd", "tools.joystick.joystickd", or_(joystick, notcar)),
   PythonProcess("selfdrived", "selfdrive.selfdrived.selfdrived", only_onroad),
+  PythonProcess("enginetempd", "sunnypilot.selfdrive.car.enginetempd", engine_temperatures),
   PythonProcess("card", "selfdrive.car.card", only_onroad),
   PythonProcess("deleter", "system.loggerd.deleter", always_run),
   PythonProcess("dmonitoringd", "selfdrive.monitoring.dmonitoringd", driverview, enabled=(WEBCAM or not PC)),

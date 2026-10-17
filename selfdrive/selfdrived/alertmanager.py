@@ -10,6 +10,9 @@ from openpilot.selfdrive.selfdrived.events import Alert
 from openpilot.sunnypilot.selfdrive.selfdrived.events_base import EmptyAlert
 
 
+INFORMATIONAL_REMINDER_TYPES = {"trafficReadyReminder/permanent", "steeringSpeedChime/permanent"}
+
+
 with open(os.path.join(BASEDIR, "selfdrive/selfdrived/alerts_offroad.json")) as f:
   OFFROAD_ALERTS = json.load(f)
 
@@ -52,6 +55,12 @@ class AlertManager:
       entry.added_frame = frame
 
   def process_alerts(self, frame: int, clear_event_types: set):
+    # Optional reminders can replace the persistent low-speed notice, but must
+    # not hide another warning of equal priority (for example, LDW or Take Control).
+    blocking_priority = max((v.alert.priority for v in self.alerts.values()
+                             if v.alert is not None and v.active(frame) and v.alert.event_type not in clear_event_types
+                             and v.alert.alert_type not in INFORMATIONAL_REMINDER_TYPES
+                             and v.alert.alert_type != "belowSteerSpeed/warning"), default=-1)
     ae = AlertEntry()
     for v in self.alerts.values():
       if not v.alert:
@@ -59,6 +68,9 @@ class AlertManager:
 
       if v.alert.event_type in clear_event_types:
         v.end_frame = -1
+
+      if v.alert.alert_type in INFORMATIONAL_REMINDER_TYPES and blocking_priority >= v.alert.priority:
+        continue
 
       # sort by priority first and then by start_frame
       greater = ae.alert is None or (v.alert.priority, v.start_frame) > (ae.alert.priority, ae.start_frame)

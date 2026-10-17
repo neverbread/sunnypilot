@@ -18,6 +18,10 @@ enum {
 };
 
 enum {
+  HYUNDAI_PARAM_ENGINE_TEMPERATURES = 2048,
+};
+
+enum {
   HYUNDAI_PARAM_SP_ESCC = 1,
   HYUNDAI_PARAM_SP_LONGITUDINAL_MAIN_CRUISE_TOGGLEABLE = 2,
   HYUNDAI_PARAM_SP_HAS_LDA_BUTTON = 4,
@@ -48,6 +52,9 @@ bool hyundai_fcev_gas_signal = false;
 
 extern bool hyundai_alt_limits_2;
 bool hyundai_alt_limits_2 = false;
+
+extern bool hyundai_engine_temperatures;
+bool hyundai_engine_temperatures = false;
 
 // ESCC
 extern bool hyundai_escc;
@@ -85,6 +92,8 @@ void hyundai_common_init(uint16_t param) {
   hyundai_alt_limits = GET_FLAG(param, HYUNDAI_PARAM_ALT_LIMITS);
   hyundai_fcev_gas_signal = GET_FLAG(param, HYUNDAI_PARAM_FCEV_GAS);
   hyundai_alt_limits_2 = GET_FLAG(param, HYUNDAI_PARAM_ALT_LIMITS_2);
+  // Only legacy Hyundai safety may opt into fixed engine and DCT read requests.
+  hyundai_engine_temperatures = false;
 
   hyundai_escc = GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_ESCC);
   hyundai_longitudinal_main_cruise_toggleable = GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_LONGITUDINAL_MAIN_CRUISE_TOGGLEABLE);

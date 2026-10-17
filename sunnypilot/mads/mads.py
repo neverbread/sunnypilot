@@ -52,6 +52,36 @@ class ModularAssistiveDrivingSystem:
     self.main_enabled_toggle = self.params.get_bool("MadsMainCruiseAllowed")
     self.steering_mode_on_brake = read_steering_mode_param(self.CP, self.params)
     self.unified_engagement_mode = self.params.get_bool("MadsUnifiedEngagementMode")
+    self.disengage_lateral_on_cancel = self.params.get_bool("DisengageLateralOnCancel")
+    self.cancel_lateral_latched = False
+    self.cancel_reengage_requested = False
+
+  def prepare_cancel(self, CS: structs.CarState):
+    """Handle Cancel before either longitudinal or MADS state transitions.
+
+    A stale PCM enabled bit, brake release, or pause recovery must not undo an
+    explicit cancellation. Only a new engagement button press clears the latch.
+    """
+    self.cancel_reengage_requested = False
+    if not self.disengage_lateral_on_cancel or self.CP.brand != "hyundai":
+      self.cancel_lateral_latched = False
+      return
+
+    if CS.canValid and not CS.canTimeout:
+      if any(be.type == ButtonType.cancel for be in CS.buttonEvents):
+        # Both edges cancel. Cancel wins over another button in the same frame.
+        self.cancel_lateral_latched = True
+      elif self.cancel_lateral_latched:
+        pressed = {be.type.raw for be in CS.buttonEvents if be.pressed}
+        if pressed.intersection((*SET_SPEED_BUTTONS, ButtonType.mainCruise, ButtonType.lkas)):
+          self.cancel_lateral_latched = False
+          self.cancel_reengage_requested = bool(pressed.intersection(SET_SPEED_BUTTONS))
+
+    if self.cancel_lateral_latched:
+      self.events.remove(EventName.pcmEnable)
+      self.events.remove(EventName.buttonEnable)
+      if not self.events.has(EventName.buttonCancel):
+        self.events.add(EventName.buttonCancel)
 
   def read_params(self):
     self.main_enabled_toggle = self.params.get_bool("MadsMainCruiseAllowed")
@@ -101,6 +131,15 @@ class ModularAssistiveDrivingSystem:
     self.events_sp.add(new_event)
 
   def update_events(self, CS: structs.CarState):
+    if self.cancel_lateral_latched:
+      # Do not let normal MADS pause/resume or Main status handling turn a
+      # cancellation into a pause that automatically resumes on the next frame.
+      self.events_sp.remove(EventNameSP.lkasEnable)
+      self.events_sp.remove(EventNameSP.silentLkasEnable)
+      self.events_sp.remove(EventNameSP.silentLkasDisable)
+      self.events_sp.add(EventNameSP.lkasDisable)
+      return
+
     if not self.selfdrive.enabled and self.enabled:
       if self.events.has(EventName.doorOpen):
         self.replace_event(EventName.doorOpen, EventNameSP.silentDoorOpen)
@@ -162,6 +201,11 @@ class ModularAssistiveDrivingSystem:
         else:
           self.events_sp.add(EventNameSP.lkasEnable)
 
+    if self.cancel_reengage_requested and not self.enabled and (CS.cruiseState.available or self.allow_always):
+      # Set/Resume is an explicit re-engagement after Cancel, including when
+      # unified engagement is disabled. Normal no-entry conditions still apply.
+      self.events_sp.add(EventNameSP.lkasEnable)
+
     if not CS.cruiseState.available and not self.no_main_cruise:
       self.events.remove(EventName.buttonEnable)
       if self.selfdrive.CS_prev.cruiseState.available:
@@ -173,7 +217,7 @@ class ModularAssistiveDrivingSystem:
           self.events_sp.add(EventNameSP.lkasDisable)
         else:
           # block lkasEnable if being sent, then send pedalPressedAlertOnly event
-          if self.events_sp.contains(EventNameSP.lkasEnable):
+          if self.events_sp.has(EventNameSP.lkasEnable):
             self.events_sp.remove(EventNameSP.lkasEnable)
             self.events_sp.add(EventNameSP.pedalPressedAlertOnly)
 

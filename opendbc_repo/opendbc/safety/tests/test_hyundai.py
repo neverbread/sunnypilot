@@ -5,6 +5,7 @@ import unittest
 
 from opendbc.car.hyundai.values import HyundaiSafetyFlags
 from opendbc.car.structs import CarParams
+from opendbc.safety import DLC_TO_LEN
 from opendbc.safety.tests.libsafety import libsafety_py
 import opendbc.safety.tests.common as common
 from opendbc.safety.tests.common import CANPackerPanda
@@ -301,6 +302,107 @@ class TestHyundaiLegacySafety(TestHyundaiSafety):
     self.safety = libsafety_py.libsafety
     self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiLegacy, 0)
     self.safety.init_tests()
+
+
+class TestHyundaiLegacyEngineTemperaturesSafety(TestHyundaiLegacySafety):
+  TX_MSGS = TestHyundaiLegacySafety.TX_MSGS + [[0x7E0, 1], [0x7DF, 1], [0x7E1, 1]]
+  TEMPERATURE_MSGS = (
+    (0x7E0, bytes.fromhex("03 22 E0 01 00 00 00 00")),
+    (0x7DF, bytes.fromhex("02 01 05 00 00 00 00 00")),
+    (0x7E0, bytes.fromhex("30 00 0A 00 00 00 00 00")),
+    (0x7E1, bytes.fromhex("03 22 01 A4 00 00 00 00")),
+    (0x7E1, bytes.fromhex("30 00 0A 00 00 00 00 00")),
+  )
+
+  def setUp(self):
+    super().setUp()
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiLegacy, HyundaiSafetyFlags.ENGINE_TEMPERATURES)
+    self.safety.init_tests()
+
+  def test_temperature_queries_with_controls_on_and_off(self):
+    for controls_allowed in (False, True):
+      self.safety.set_controls_allowed(controls_allowed)
+      for addr, dat in self.TEMPERATURE_MSGS:
+        self.assertEqual(self._tx(libsafety_py.make_CANPacket(addr, 1, dat)), 1)
+        self.assertEqual(self.safety.get_controls_allowed(), controls_allowed)
+      for addr, dat in ((0x7E8, "10 33 62 E0 01 00 00 00"), (0x7E9, "10 31 62 01 A4 00 00 00")):
+        self._rx(libsafety_py.make_CANPacket(addr, 1, bytes.fromhex(dat)))
+        self.assertEqual(self.safety.get_controls_allowed(), controls_allowed)
+
+  def test_temperature_query_payloads_exact(self):
+    # Mutate every byte, including all ISO-TP fields and padding. Only the five
+    # complete messages are permitted, not arbitrary reads or diagnostic writes.
+    for addr, dat in self.TEMPERATURE_MSGS:
+      for index in range(8):
+        for value in range(256):
+          if value == dat[index]:
+            continue
+          changed = bytearray(dat)
+          changed[index] = value
+          self.assertEqual(self._tx(libsafety_py.make_CANPacket(addr, 1, changed)), 0,
+                           (hex(addr), index, changed.hex()))
+
+  def test_temperature_query_bus_and_length(self):
+    for addr, dat in self.TEMPERATURE_MSGS:
+      for bus in range(8):
+        for length in DLC_TO_LEN:
+          msg = libsafety_py.make_CANPacket(addr, bus, dat[:length].ljust(length, b"\x00"))
+          self.assertEqual(self._tx(msg), int(bus == 1 and length == 8), (bus, length))
+      msg = libsafety_py.make_CANPacket(addr, 1, dat)
+      msg[0].extended = 1
+      self.assertEqual(self._tx(msg), 0)
+      msg[0].extended = 0
+      msg[0].fd = 1
+      self.assertFalse(self._tx(msg))
+
+  def test_temperature_query_addresses(self):
+    for _, dat in self.TEMPERATURE_MSGS:
+      for addr in list(range(0x700, 0x800)) + [0x18DB33F1, 0x18DA10F1]:
+        self.assertEqual(self._tx(libsafety_py.make_CANPacket(addr, 1, dat)), int((addr, dat) in self.TEMPERATURE_MSGS), hex(addr))
+
+  def test_temperature_queries_only_with_legacy_flag(self):
+    for mode in (CarParams.SafetyModel.hyundaiLegacy, CarParams.SafetyModel.hyundai, CarParams.SafetyModel.hyundaiCanfd,
+                 CarParams.SafetyModel.silent, CarParams.SafetyModel.noOutput):
+      for flags in (0, HyundaiSafetyFlags.ENGINE_TEMPERATURES):
+        self.assertEqual(self.safety.set_safety_hooks(mode, flags), 0)
+        self.safety.init_tests()
+        for addr, dat in self.TEMPERATURE_MSGS:
+          expected = mode == CarParams.SafetyModel.hyundaiLegacy and flags == HyundaiSafetyFlags.ENGINE_TEMPERATURES
+          self.assertEqual(self._tx(libsafety_py.make_CANPacket(addr, 1, dat)), int(expected), (mode, flags))
+
+  def test_temperature_queries_blocked_on_relay_fault(self):
+    self.safety.set_relay_malfunction(True)
+    for addr, dat in self.TEMPERATURE_MSGS:
+      self.assertFalse(self._tx(libsafety_py.make_CANPacket(addr, 1, dat)))
+
+  def test_temperature_queries_preserve_mads_state(self):
+    for enabled in (False, True):
+      for lateral_allowed in (False, True):
+        for controls_allowed in (False, True):
+          self.safety.set_mads_params(enabled, False, False)
+          self.safety.set_controls_allowed_lat(lateral_allowed)
+          self.safety.set_controls_requested_lat(lateral_allowed)
+          self.safety.set_controls_allowed(controls_allowed)
+          before = (self.safety.get_enable_mads(), self.safety.get_controls_allowed_lat(),
+                    self.safety.get_controls_requested_lat(), self.safety.get_controls_allowed())
+          for addr, dat in self.TEMPERATURE_MSGS:
+            self.assertTrue(self._tx(libsafety_py.make_CANPacket(addr, 1, dat)))
+            self.assertEqual((self.safety.get_enable_mads(), self.safety.get_controls_allowed_lat(),
+                              self.safety.get_controls_requested_lat(), self.safety.get_controls_allowed()), before)
+
+  def test_obd_routing_follows_active_safety_configuration(self):
+    # Exercise transitions to every supported mode, including clearing the flag.
+    # ELM327's existing routing behavior remains unchanged.
+    modes = CarParams.SafetyModel.schema.enumerants.values()
+    for mode in modes:
+      for flags in (0, 1, HyundaiSafetyFlags.ENGINE_TEMPERATURES, 0xFFFF):
+        if self.safety.set_safety_hooks(mode, flags) != 0:
+          continue
+        expected = (mode == CarParams.SafetyModel.elm327 and flags == 0) or \
+                   (mode == CarParams.SafetyModel.hyundaiLegacy and bool(flags & HyundaiSafetyFlags.ENGINE_TEMPERATURES))
+        self.assertEqual(self.safety.safety_uses_obd_can2(), expected, (mode, flags))
+    self.safety.set_safety_hooks(CarParams.SafetyModel.silent, 0)
+    self.assertFalse(self.safety.safety_uses_obd_can2())
 
 
 class TestHyundaiLegacySafetyEV(TestHyundaiSafety):

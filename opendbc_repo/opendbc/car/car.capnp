@@ -432,6 +432,9 @@ struct CarControl {
       prompt @6;
       promptRepeat @7;
       promptDistracted @8;
+
+      # Separate playback identity for optional, one-shot driver reminders.
+      informationalPrompt @9;
     }
   }
 

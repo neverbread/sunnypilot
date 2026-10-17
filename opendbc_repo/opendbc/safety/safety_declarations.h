@@ -320,6 +320,7 @@ extern safety_config current_safety_config;
 
 int safety_fwd_hook(int bus_num, int addr);
 int set_safety_hooks(uint16_t mode, uint16_t param);
+bool safety_uses_obd_can2(void);
 
 extern const safety_hooks body_hooks;
 extern const safety_hooks chrysler_hooks;

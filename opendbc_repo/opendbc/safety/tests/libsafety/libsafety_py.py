@@ -29,6 +29,7 @@ bool safety_rx_hook(CANPacket_t *msg);
 bool safety_tx_hook(CANPacket_t *msg);
 int safety_fwd_hook(int bus_num, int addr);
 int set_safety_hooks(uint16_t mode, uint16_t param);
+bool safety_uses_obd_can2(void);
 """)
 
 ffi.cdef("""
@@ -58,6 +59,7 @@ class Panda(PandaSafety, Protocol):
   def safety_tx_hook(self, msg: CANPacket) -> int: ...
   def safety_fwd_hook(self, bus_num: int, addr: int) -> int: ...
   def set_safety_hooks(self, mode: int, param: int) -> int: ...
+  def safety_uses_obd_can2(self) -> bool: ...
 
 
 libsafety: Panda = ffi.dlopen(libsafety_fn)

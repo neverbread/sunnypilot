@@ -92,6 +92,11 @@ int current_safety_param_sp = 0;
 static const safety_hooks *current_hooks = &nooutput_hooks;
 safety_config current_safety_config;
 
+bool safety_uses_obd_can2(void) {
+  return ((current_safety_mode == SAFETY_ELM327) && (current_safety_param == 0U)) ||
+         ((current_safety_mode == SAFETY_HYUNDAI_LEGACY) && hyundai_engine_temperatures);
+}
+
 static void generic_rx_checks(void);
 static void stock_ecu_check(bool stock_ecu_detected);
 

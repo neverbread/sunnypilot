@@ -30,6 +30,22 @@ class EventsSP(EventsBase):
 
 
 EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
+  EventNameSP.trafficReadyReminder: {
+    ET.PERMANENT: Alert(
+      "Traffic May Be Ready to Move",
+      "Check the road before proceeding",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.informationalPrompt, 2.),
+  },
+
+  EventNameSP.steeringSpeedChime: {
+    ET.PERMANENT: Alert(
+      "32 mph Steering Speed Reminder",
+      "Be ready to steer manually",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.informationalPrompt, 2.),
+  },
+
   # sunnypilot
   EventNameSP.lkasEnable: {
     ET.ENABLE: EngagementAlert(AudibleAlert.engage),

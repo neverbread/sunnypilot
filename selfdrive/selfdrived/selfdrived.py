@@ -28,6 +28,7 @@ from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
 from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
+from openpilot.sunnypilot.selfdrive.selfdrived.driver_notifications import DriverNotifications
 
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
@@ -141,7 +142,8 @@ class SelfdriveD(CruiseHelper):
     nvme_expected = os.path.exists('/dev/nvme0n1') or (not os.path.isfile("/persist/comma/living-in-the-moment"))
     if HARDWARE.get_device_type() == 'tici' and nvme_expected:
       self.ignored_processes = {'loggerd', }
-    self.ignored_processes.update({'mapd'})
+    # Optional display telemetry must never gate engagement or disengage controls.
+    self.ignored_processes.update({'mapd', 'enginetempd'})
 
     # Determine startup event
     is_remote = build_metadata.openpilot.comma_remote or build_metadata.openpilot.sunnypilot_remote
@@ -163,6 +165,7 @@ class SelfdriveD(CruiseHelper):
     self.events_sp_prev = []
 
     self.mads = ModularAssistiveDrivingSystem(self)
+    self.driver_notifications = DriverNotifications(self.params)
 
     self.car_events_sp = CarSpecificEventsSP(self.CP, self.params)
 
@@ -452,6 +455,7 @@ class SelfdriveD(CruiseHelper):
   def data_sample(self):
     _car_state = messaging.recv_one(self.car_state_sock)
     CS = _car_state.carState if _car_state else self.CS_prev
+    self.car_state_fresh = _car_state is not None and _car_state.valid
 
     self.sm.update(0)
 
@@ -566,10 +570,18 @@ class SelfdriveD(CruiseHelper):
   def step(self):
     CS = self.data_sample()
     self.update_events(CS)
+    self.mads.prepare_cancel(CS)
     if not self.CP.passive and self.initialized:
       self.enabled, self.active = self.state_machine.update(self.events)
     if not self.CP.notCar:
       self.mads.update(CS)
+    notifications_allowed = (self.initialized and not self.CP.passive and not self.CP.notCar and
+                             self.sm['controlsState'].lateralControlState.which() != 'debugState' and
+                             self.sm.recv_frame['alertDebug'] == 0)
+    for event in self.driver_notifications.update(CS, self.sm, allowed=notifications_allowed,
+                                                  selfdrive_enabled=self.enabled, mads_enabled=self.mads.enabled,
+                                                  car_state_fresh=self.car_state_fresh):
+      self.events_sp.add(event)
     self.update_alerts(CS)
 
     self.publish_selfdriveState(CS)
@@ -585,6 +597,7 @@ class SelfdriveD(CruiseHelper):
       self.personality = self.params.get("LongitudinalPersonality", return_default=True)
 
       self.mads.read_params()
+      self.driver_notifications.read_params()
       time.sleep(0.1)
 
   def run(self):

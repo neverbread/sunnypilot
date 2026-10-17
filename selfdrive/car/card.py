@@ -24,6 +24,7 @@ from openpilot.selfdrive.car.helpers import convert_carControlSP, convert_to_cap
 
 from openpilot.sunnypilot.mads.helpers import set_alternative_experience, set_car_specific_params
 from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfaces
+from openpilot.sunnypilot.selfdrive.car.enginetempd import configure_engine_temperatures
 
 REPLAY = "REPLAY" in os.environ
 
@@ -137,6 +138,9 @@ class Car:
       safety_config = structs.CarParams.SafetyConfig()
       safety_config.safetyModel = structs.CarParams.SafetyModel.noOutput
       self.CP.safetyConfigs = [safety_config]
+
+    configure_engine_temperatures(self.CP, self.params.get_bool("EngineTemperatureDisplay"),
+                                   self.params.get_bool("DctTemperatureDisplay"))
 
     if self.CP.secOcRequired and not is_release:
       # Copy user key if available
