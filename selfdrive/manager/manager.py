@@ -54,6 +54,8 @@ def manager_init() -> None:
     ("AutoLaneChangeBsmDelay", "1"),
     ("BelowSpeedPause", "0"),
     ("BlindspotLaneHighlight", "1"),
+    ("EngineTemperatureDisplay", "1"),
+    ("DctTemperatureDisplay", "1"),
     ("BrakeLights", "0"),
     ("BrightnessControl", "0"),
     ("CustomTorqueLateral", "0"),

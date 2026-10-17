@@ -89,6 +89,22 @@
         <source>LIMIT</source>
         <translation>LIMIT</translation>
     </message>
+    <message>
+        <source>OIL</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>COOLANT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>CLUTCH 1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>CLUTCH 2</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>ConfirmationDialog</name>
@@ -1161,6 +1177,22 @@ This may take up to a minute.</source>
     </message>
     <message>
         <source>Play a noticeable chime when slowing down through 32 mph (51.5 km/h) with sunnypilot engaged. Rearms after speed reaches 33 mph. This is a speed reminder for vehicles with a steering-assist minimum speed, not a measurement of steering availability.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Engine Temperature Display</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show engine oil and coolant temperatures on the driving screen for the 2018 Elantra GT Sport. Uses read-only engine diagnostics. Unavailable readings appear as a dash. Takes effect after restarting the car.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>DCT Clutch Temperature Display</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show the transmission controller&apos;s reported clutch 1 and clutch 2 temperatures on the driving screen for the 2018 Elantra GT Sport. These values may be modeled estimates. Uses Celsius with Use Metric System enabled, otherwise Fahrenheit. Unavailable readings appear as a dash. Takes effect after restarting the car.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

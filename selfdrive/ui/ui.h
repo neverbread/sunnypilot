@@ -155,6 +155,8 @@ typedef struct UIScene {
   QPolygonF road_edge_vertices[2];
   QPolygonF blindspot_lane_vertices[2];
   bool blindspot_lane_highlight = false;
+  bool engine_temperature_display = false;
+  bool dct_temperature_display = false;
 
   // lead
   QPointF lead_vertices[2];

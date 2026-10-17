@@ -327,6 +327,11 @@ class CarInterface(CarInterfaceBase):
       if ret.spFlags & HyundaiFlagsSP.SP_ENHANCED_SCC:
         ret.safetyConfigs[0].safetyParam |= Panda.FLAG_HYUNDAI_ESCC
 
+      # The supplied ECM/TCM PID profile is supported only for this vehicle.
+      # Bus 1 is routed to OBD and permits only fixed temperature read requests.
+      if candidate == CAR.ELANTRA_GT_I30 and (Params().get_bool("EngineTemperatureDisplay") or Params().get_bool("DctTemperatureDisplay")):
+        ret.safetyConfigs[0].safetyParam |= Panda.FLAG_HYUNDAI_ENGINE_TEMPERATURES
+
     if ret.openpilotLongitudinalControl:
       ret.safetyConfigs[-1].safetyParam |= Panda.FLAG_HYUNDAI_LONG
     if candidate in HYBRID_CAR:

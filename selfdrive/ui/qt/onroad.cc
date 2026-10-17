@@ -377,6 +377,26 @@ void AnnotatedCameraWidget::updateState(const UIState &s) {
   hideBottomIcons = (cs.getAlertSize() != cereal::ControlsState::AlertSize::NONE);
   status = s.status;
 
+  const auto temperatures = sm["engineTemperature"].getEngineTemperature();
+  const bool temperatures_current_drive = sm.rcv_frame("engineTemperature") > s.scene.started_frame;
+  const bool alert_visible = Alert::get(sm, s.scene.started_frame, s.scene.display_debug_alert_frame).size != cereal::ControlsState::AlertSize::NONE;
+  const bool temperatures_visible = temperatures_current_drive && temperatures.getSupported() && !alert_visible;
+  show_engine_temperatures = s.scene.engine_temperature_display && temperatures_visible;
+  show_dct_temperatures = s.scene.dct_temperature_display && temperatures_visible;
+  const bool temperatures_fresh = temperatures_current_drive && sm.alive("engineTemperature") && sm.valid("engineTemperature") &&
+                                 (nanos_since_boot() - sm.rcv_time("engineTemperature")) <= 3e9;
+  const QString temperature_unit = is_metric ? QStringLiteral("\u00b0C") : QStringLiteral("\u00b0F");
+  auto temperature_text = [&](float celsius, bool valid) {
+    const QString value = temperatures_fresh && valid && std::isfinite(celsius)
+                            ? QString::number(std::round(is_metric ? celsius : celsius * 1.8 + 32.0), 'f', 0)
+                            : QStringLiteral("\u2014");
+    return value + temperature_unit;
+  };
+  oil_temperature = temperature_text(temperatures.getOilCelsius(), temperatures.getOilValid());
+  coolant_temperature = temperature_text(temperatures.getCoolantCelsius(), temperatures.getCoolantValid());
+  clutch1_temperature = temperature_text(temperatures.getClutch1Celsius(), temperatures.getClutch1Valid());
+  clutch2_temperature = temperature_text(temperatures.getClutch2Celsius(), temperatures.getClutch2Valid());
+
   // update engageability/experimental mode button
   experimental_btn->updateState(s);
 
@@ -489,6 +509,55 @@ void AnnotatedCameraWidget::drawHud(QPainter &p) {
   p.setFont(InterFont(66));
   drawText(p, rect().center().x(), 290, speedUnit, 200);
 
+  drawTemperatures(p);
+
+  p.restore();
+}
+
+void AnnotatedCameraWidget::drawTemperatures(QPainter &p) {
+  // Keep the card beside the speed display, including when the map narrows the camera view.
+  // Suppress supplementary data during alerts so the driver's attention stays on the alert.
+  const int row_count = 2 * (int(show_engine_temperatures) + int(show_dct_temperatures));
+  if (row_count == 0 || hideBottomIcons || width() < 800) return;
+
+  const int row_height = 107;
+  const QRect card(width() - UI_BORDER_SIZE - 236, UI_BORDER_SIZE + btn_size + 20, 236, row_count * row_height + 4);
+  if (card.bottom() + 20 >= height() - UI_BORDER_SIZE - btn_size) return;
+  p.save();
+  p.setPen(Qt::NoPen);
+  p.setBrush(blackColor(150));
+  p.drawRoundedRect(card, 24, 24);
+
+  int row = 0;
+  auto draw_reading = [&](const QString &label, const QString &value) {
+    const int top = card.y() + 12 + row * row_height;
+    if (row > 0) {
+      p.setPen(QPen(whiteColor(35), 1));
+      p.drawLine(card.x() + 24, top - 12, card.right() - 24, top - 12);
+    }
+    const QRect label_rect(card.x() + 16, top, card.width() - 32, 34);
+    p.setFont(InterFont(28, QFont::DemiBold));
+    p.setPen(whiteColor(175));
+    p.drawText(label_rect, Qt::AlignCenter, p.fontMetrics().elidedText(label, Qt::ElideRight, label_rect.width()));
+    int value_font_size = 44;
+    p.setFont(InterFont(value_font_size, QFont::DemiBold));
+    while (p.fontMetrics().horizontalAdvance(value) > label_rect.width() && value_font_size > 24) {
+      p.setFont(InterFont(--value_font_size, QFont::DemiBold));
+    }
+    p.setPen(whiteColor(235));
+    p.drawText(QRect(card.x() + 16, top + 32, card.width() - 32, 54), Qt::AlignCenter,
+               p.fontMetrics().elidedText(value, Qt::ElideRight, label_rect.width()));
+    ++row;
+  };
+
+  if (show_engine_temperatures) {
+    draw_reading(tr("OIL"), oil_temperature);
+    draw_reading(tr("COOLANT"), coolant_temperature);
+  }
+  if (show_dct_temperatures) {
+    draw_reading(tr("CLUTCH 1"), clutch1_temperature);
+    draw_reading(tr("CLUTCH 2"), clutch2_temperature);
+  }
   p.restore();
 }
 

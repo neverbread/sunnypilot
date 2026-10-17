@@ -41,6 +41,10 @@ def only_onroad(started: bool, params, CP: car.CarParams) -> bool:
 def only_offroad(started, params, CP: car.CarParams) -> bool:
   return not started
 
+def engine_temperatures(started: bool, params: Params, CP: car.CarParams) -> bool:
+  from openpilot.selfdrive.car.hyundai.enginetempd import supports_engine_temperatures
+  return started and (params.get_bool("EngineTemperatureDisplay") or params.get_bool("DctTemperatureDisplay")) and supports_engine_temperatures(CP)
+
 procs = [
   DaemonProcess("manage_athenad", "selfdrive.athena.manage_athenad", "AthenadPid"),
 
@@ -66,6 +70,7 @@ procs = [
   PythonProcess("calibrationd", "selfdrive.locationd.calibrationd", only_onroad),
   PythonProcess("torqued", "selfdrive.locationd.torqued", only_onroad),
   PythonProcess("controlsd", "selfdrive.controls.controlsd", only_onroad),
+  PythonProcess("enginetempd", "selfdrive.car.hyundai.enginetempd", engine_temperatures),
   PythonProcess("deleter", "system.loggerd.deleter", always_run),
   PythonProcess("dmonitoringd", "selfdrive.monitoring.dmonitoringd", driverview, enabled=(not PC or WEBCAM)),
   PythonProcess("rawgpsd", "system.sensord.rawgps.rawgpsd", qcomgps, enabled=TICI),

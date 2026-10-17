@@ -91,6 +91,18 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       "../assets/offroad/icon_warning.png",
     },
     {
+      "EngineTemperatureDisplay",
+      tr("Engine Temperature Display"),
+      tr("Show engine oil and coolant temperatures on the driving screen for the 2018 Elantra GT Sport. Uses read-only engine diagnostics. Unavailable readings appear as a dash. Takes effect after restarting the car."),
+      "../assets/offroad/icon_metric.png",
+    },
+    {
+      "DctTemperatureDisplay",
+      tr("DCT Clutch Temperature Display"),
+      tr("Show the transmission controller's reported clutch 1 and clutch 2 temperatures on the driving screen for the 2018 Elantra GT Sport. These values may be modeled estimates. Uses Celsius with Use Metric System enabled, otherwise Fahrenheit. Unavailable readings appear as a dash. Takes effect after restarting the car."),
+      "../assets/offroad/icon_metric.png",
+    },
+    {
       "RecordFront",
       tr("Record and Upload Driver Camera"),
       tr("Upload data from the driver facing camera and help improve the driver monitoring algorithm."),

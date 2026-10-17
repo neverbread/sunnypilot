@@ -89,6 +89,22 @@
         <source>LIMIT</source>
         <translation>OGRANICZENIE</translation>
     </message>
+    <message>
+        <source>OIL</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>COOLANT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>CLUTCH 1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>CLUTCH 2</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>ConfirmationDialog</name>
@@ -1064,6 +1080,22 @@ nie zostało ustawione</translation>
     </message>
     <message>
         <source>Enable experimental longitudinal control to enable this.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Engine Temperature Display</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show engine oil and coolant temperatures on the driving screen for the 2018 Elantra GT Sport. Uses read-only engine diagnostics. Unavailable readings appear as a dash. Takes effect after restarting the car.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>DCT Clutch Temperature Display</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show the transmission controller&apos;s reported clutch 1 and clutch 2 temperatures on the driving screen for the 2018 Elantra GT Sport. These values may be modeled estimates. Uses Celsius with Use Metric System enabled, otherwise Fahrenheit. Unavailable readings appear as a dash. Takes effect after restarting the car.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

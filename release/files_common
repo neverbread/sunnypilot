@@ -89,6 +89,7 @@ selfdrive/boardd/SConscript
 selfdrive/boardd/__init__.py
 selfdrive/boardd/boardd.cc
 selfdrive/boardd/boardd.h
+selfdrive/boardd/engine_temperature.h
 selfdrive/boardd/main.cc
 selfdrive/boardd/boardd.py
 selfdrive/boardd/boardd_api_impl.pyx

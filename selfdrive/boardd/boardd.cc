@@ -28,6 +28,7 @@
 #include "common/swaglog.h"
 #include "common/timing.h"
 #include "common/util.h"
+#include "selfdrive/boardd/engine_temperature.h"
 #include "system/hardware/hw.h"
 
 // -- Multi-panda conventions --
@@ -215,31 +216,68 @@ void can_send_thread(std::vector<Panda *> pandas, bool fake_send) {
   AlignedBuffer aligned_buf;
   std::unique_ptr<Context> context(Context::create());
   std::unique_ptr<SubSocket> subscriber(SubSocket::create(context.get(), "sendcan"));
+  std::unique_ptr<SubSocket> temperature_subscriber(SubSocket::create(context.get(), "engineTemperatureRequest", "127.0.0.1", true));
   assert(subscriber != NULL);
-  subscriber->setTimeout(100);
+  assert(temperature_subscriber != NULL);
+  std::unique_ptr<Poller> poller(Poller::create({subscriber.get(), temperature_subscriber.get()}));
+  EngineTemperatureRequests temperature_requests;
+  using TemperatureKind = cereal::EngineTemperatureRequest::Kind;
+  static_assert(static_cast<int>(TemperatureKind::COOLANT) == EngineTemperatureRequests::COOLANT);
+  static_assert(static_cast<int>(TemperatureKind::OIL) == EngineTemperatureRequests::OIL);
+  static_assert(static_cast<int>(TemperatureKind::FLOW_CONTROL) == EngineTemperatureRequests::FLOW_CONTROL);
+  static_assert(static_cast<int>(TemperatureKind::CLUTCH) == EngineTemperatureRequests::CLUTCH);
+  static_assert(static_cast<int>(TemperatureKind::CLUTCH_FLOW_CONTROL) == EngineTemperatureRequests::CLUTCH_FLOW_CONTROL);
 
   // run as fast as messages come in
   while (!do_exit && check_all_connected(pandas)) {
-    std::unique_ptr<Message> msg(subscriber->receive());
-    if (!msg) {
-      if (errno == EINTR) {
-        do_exit = true;
+    for (auto sock : poller->poll(100)) {
+      std::unique_ptr<Message> msg(sock->receive(true));
+      if (!msg) {
+        if (errno == EINTR) {
+          do_exit = true;
+        }
+        continue;
       }
-      continue;
-    }
 
-    capnp::FlatArrayMessageReader cmsg(aligned_buf.align(msg.get()));
-    cereal::Event::Reader event = cmsg.getRoot<cereal::Event>();
-
-    // Don't send if older than 1 second
-    if ((nanos_since_boot() - event.getLogMonoTime() < 1e9) && !fake_send) {
-      for (const auto& panda : pandas) {
-        LOGT("sending sendcan to panda: %s", (panda->hw_serial()).c_str());
-        panda->can_send(event.getSendcan());
-        LOGT("sendcan sent to panda: %s", (panda->hw_serial()).c_str());
+      if (sock == temperature_subscriber.get()) {
+        // Malformed optional telemetry must never interrupt the control CAN path.
+        if (msg->getSize() == 0 || msg->getSize() > 256) continue;
+        try {
+          capnp::ReaderOptions options;
+          options.traversalLimitInWords = 64;
+          options.nestingLimit = 4;
+          capnp::FlatArrayMessageReader cmsg(aligned_buf.align(msg.get()), options);
+          cereal::Event::Reader event = cmsg.getRoot<cereal::Event>();
+          if (event.which() != cereal::Event::ENGINE_TEMPERATURE_REQUEST || !event.getValid()) continue;
+          auto frame = temperature_requests.get(static_cast<unsigned int>(event.getEngineTemperatureRequest().getKind()),
+                                               event.getLogMonoTime(), nanos_since_boot(), ignition && !fake_send);
+          if (frame && !pandas.empty()) {
+            MessageBuilder temperature_msg;
+            auto can = temperature_msg.initEvent().initSendcan(1);
+            can[0].setAddress(frame->address);
+            can[0].setSrc(1);
+            can[0].setDat(kj::arrayPtr(frame->data.data(), frame->data.size()));
+            // The internal panda alone connects to the diagnostic port (bus 1).
+            pandas[0]->can_send(can.asReader());
+          }
+        } catch (const kj::Exception &) {
+          // Drop invalid telemetry without disturbing steering or cruise messages.
+        }
+        continue;
       }
-    } else {
-      LOGE("sendcan too old to send: %" PRIu64 ", %" PRIu64, nanos_since_boot(), event.getLogMonoTime());
+
+      capnp::FlatArrayMessageReader cmsg(aligned_buf.align(msg.get()));
+      cereal::Event::Reader event = cmsg.getRoot<cereal::Event>();
+      // Don't send if older than 1 second
+      if ((nanos_since_boot() - event.getLogMonoTime() < 1e9) && !fake_send) {
+        for (const auto& panda : pandas) {
+          LOGT("sending sendcan to panda: %s", (panda->hw_serial()).c_str());
+          panda->can_send(event.getSendcan());
+          LOGT("sendcan sent to panda: %s", (panda->hw_serial()).c_str());
+        }
+      } else {
+        LOGE("sendcan too old to send: %" PRIu64 ", %" PRIu64, nanos_since_boot(), event.getLogMonoTime());
+      }
     }
   }
 }

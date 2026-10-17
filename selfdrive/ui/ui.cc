@@ -246,6 +246,8 @@ void ui_update_params(UIState *s) {
   s->scene.show_debug_ui = params.getBool("ShowDebugUI");
   s->scene.debug_snapshot_enabled = params.getBool("EnableDebugSnapshot");
   s->scene.blindspot_lane_highlight = params.getBool("BlindspotLaneHighlight");
+  s->scene.engine_temperature_display = params.getBool("EngineTemperatureDisplay");
+  s->scene.dct_temperature_display = params.getBool("DctTemperatureDisplay");
 }
 
 void UIState::updateStatus() {
@@ -274,7 +276,7 @@ UIState::UIState(QObject *parent) : QObject(parent) {
   sm = std::make_unique<SubMaster, const std::initializer_list<const char *>>({
     "modelV2", "controlsState", "liveCalibration", "radarState", "deviceState", "roadCameraState",
     "pandaStates", "carParams", "driverMonitoringState", "carState", "liveLocationKalman", "driverStateV2",
-    "wideRoadCameraState", "managerState", "navInstruction", "navRoute", "uiPlan", "longitudinalPlanSP", "liveMapDataSP",
+    "wideRoadCameraState", "managerState", "navInstruction", "navRoute", "uiPlan", "longitudinalPlanSP", "liveMapDataSP", "engineTemperature",
   });
 
   Params params;
