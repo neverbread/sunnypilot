@@ -1,6 +1,7 @@
 from cereal import car
 from panda import Panda
 from openpilot.common.conversions import Conversions as CV
+from openpilot.common.params import Params
 from openpilot.selfdrive.car.hyundai.hyundaicanfd import CanBus
 from openpilot.selfdrive.car.hyundai.values import HyundaiFlags, HyundaiFlagsSP, CAR, DBC, CANFD_CAR, CAMERA_SCC_CAR, CANFD_RADAR_SCC_CAR, \
                                          CANFD_UNSUPPORTED_LONGITUDINAL_CAR, NON_SCC_CAR, EV_CAR, HYBRID_CAR, LEGACY_SAFETY_MODE_CAR, \
@@ -19,6 +20,11 @@ BUTTONS_DICT = {Buttons.RES_ACCEL: ButtonType.accelCruise, Buttons.SET_DECEL: Bu
 
 
 class CarInterface(CarInterfaceBase):
+  def __init__(self, CP, CarController, CarState):
+    super().__init__(CP, CarController, CarState)
+    self.disengage_lateral_on_cancel = Params().get_bool("DisengageLateralOnCancel")
+    self.cancel_lateral_latched = False
+
   @staticmethod
   def _get_params(ret, candidate, fingerprint, car_fw, experimental_long, docs):
     ret.carName = "hyundai"
@@ -353,16 +359,28 @@ class CarInterface(CarInterfaceBase):
       disable_ecu(logcan, sendcan, bus=CanBus(CP).ECAN, addr=0x7B1, com_cont_req=b'\x28\x83\x01')
 
   def _update(self, c):
+    prev_main_button = self.CS.main_buttons[-1]
     ret = self.CS.update(self.cp, self.cp_cam)
 
-    if self.CS.CP.openpilotLongitudinalControl:
+    if self.CS.CP.openpilotLongitudinalControl or self.disengage_lateral_on_cancel:
       ret.buttonEvents = create_button_events(self.CS.cruise_buttons[-1], self.CS.prev_cruise_buttons, BUTTONS_DICT)
+
+    if self.disengage_lateral_on_cancel:
+      # Observe cancel directly even with stock ACC, whose disengagement status can arrive later.
+      # Keep cancellation latched until another explicit engagement action, including after release.
+      if self.CS.cruise_buttons[-1] == Buttons.CANCEL or any(b.type == ButtonType.cancel for b in ret.buttonEvents):
+        self.cancel_lateral_latched = True
+      elif any(b.type in (ButtonType.accelCruise, ButtonType.decelCruise) for b in ret.buttonEvents) or \
+          (self.CS.main_buttons[-1] and not prev_main_button):
+        self.cancel_lateral_latched = False
 
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
     # To avoid re-engaging when openpilot cancels, check user engagement intention via buttons
     # Main button also can trigger an engagement on these cars
-    allow_enable = any(btn in ENABLE_BUTTONS for btn in self.CS.cruise_buttons) or any(self.CS.main_buttons)
+    allow_enable = (any(btn in ENABLE_BUTTONS for btn in self.CS.cruise_buttons) or any(self.CS.main_buttons)) and not self.cancel_lateral_latched
     events = self.create_common_events(ret, pcm_enable=self.CS.CP.pcmCruise, allow_enable=allow_enable)
+    if self.cancel_lateral_latched:
+      events.add(EventName.buttonCancel)
 
     # low speed steer alert hysteresis logic (only for cars with steer cut off above 10 m/s)
     if ret.vEgo < (self.CP.minSteerSpeed + 2.) and self.CP.minSteerSpeed > 10.:

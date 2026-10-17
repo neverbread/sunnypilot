@@ -61,6 +61,36 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       "../assets/offroad/icon_warning.png",
     },
     {
+      "BlindspotLaneHighlight",
+      tr("Red Blindspot Lane Highlight"),
+      tr("Fill the adjacent lane red on the side where your car's blindspot sensor detects a vehicle. Requires blindspot sensors and visible lane boundaries."),
+      "../assets/offroad/icon_road.png",
+    },
+    {
+      "LeadDepartAlert",
+      tr("Lead Vehicle Departure Chime"),
+      tr("Play a chime when the vehicle ahead starts moving while you remain stopped. Check the road before proceeding."),
+      "../assets/offroad/icon_warning.png",
+    },
+    {
+      "GreenLightAlert",
+      tr("Green Light Reminder"),
+      tr("While stopped without a lead vehicle, play a chime when the driving model changes from stopping to proceeding. This is a model-based reminder, not traffic-light color detection. Check the light and road before proceeding."),
+      "../assets/offroad/icon_warning.png",
+    },
+    {
+      "DisengageLateralOnCancel",
+      tr("Disengage Steering with Cancel"),
+      tr("On Hyundai, Kia, and Genesis vehicles, immediately disengage steering and cruise when the steering-wheel Cancel button is pressed. Requires a new Set, Resume, or cruise Main button action to engage again. Takes effect after restarting the car."),
+      "../assets/offroad/icon_openpilot.png",
+    },
+    {
+      "SteeringSpeedChime",
+      tr("32 mph Steering Speed Chime"),
+      tr("Play a noticeable chime when slowing down through 32 mph (51.5 km/h) with sunnypilot engaged. Rearms after speed reaches 33 mph. This is a speed reminder for vehicles with a steering-assist minimum speed, not a measurement of steering availability."),
+      "../assets/offroad/icon_warning.png",
+    },
+    {
       "RecordFront",
       tr("Record and Upload Driver Camera"),
       tr("Upload data from the driver facing camera and help improve the driver monitoring algorithm."),

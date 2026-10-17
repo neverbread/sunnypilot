@@ -153,6 +153,8 @@ typedef struct UIScene {
   QPolygonF track_vertices;
   QPolygonF lane_line_vertices[4];
   QPolygonF road_edge_vertices[2];
+  QPolygonF blindspot_lane_vertices[2];
+  bool blindspot_lane_highlight = false;
 
   // lead
   QPointF lead_vertices[2];

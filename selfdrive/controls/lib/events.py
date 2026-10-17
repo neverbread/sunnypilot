@@ -350,6 +350,22 @@ EVENTS: Dict[int, Dict[str, Union[Alert, AlertCallbackType]]] = {
 
   # ********** events only containing alerts displayed in all states **********
 
+  EventName.e2eLongStart: {
+    ET.PERMANENT: Alert(
+      "Traffic May Be Ready to Move",
+      "Check the road before proceeding",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 2.),
+  },
+
+  EventName.steeringSpeedChime: {
+    ET.PERMANENT: Alert(
+      "32 mph Steering Speed Reminder",
+      "Be ready to steer manually",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 2.),
+  },
+
   EventName.joystickDebug: {
     ET.WARNING: joystick_alert,
     ET.PERMANENT: NormalPermanentAlert("Joystick Mode"),

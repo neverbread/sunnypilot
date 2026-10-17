@@ -535,6 +535,17 @@ void AnnotatedCameraWidget::drawLaneLines(QPainter &painter, const UIState *s) {
   const UIScene &scene = s->scene;
   SubMaster &sm = *(s->sm);
 
+  // The car's BSM signals select the occupied adjacent lane independently on each side.
+  if (scene.blindspot_lane_highlight && sm.alive("carState") && sm.valid("carState") && sm.alive("modelV2") && sm.valid("modelV2") &&
+      sm.rcv_frame("carState") > scene.started_frame && sm.rcv_frame("modelV2") > scene.started_frame) {
+    const auto car_state = sm["carState"].getCarState();
+    const bool blindspots[] = {car_state.getLeftBlindspot(), car_state.getRightBlindspot()};
+    painter.setBrush(QColor(255, 0, 0, 102));
+    for (int i = 0; i < std::size(blindspots); ++i) {
+      if (blindspots[i]) painter.drawPolygon(scene.blindspot_lane_vertices[i]);
+    }
+  }
+
   // lanelines
   for (int i = 0; i < std::size(scene.lane_line_vertices); ++i) {
     painter.setBrush(QColor::fromRgbF(1.0, 1.0, 1.0, std::clamp<float>(scene.lane_line_probs[i], 0.0, 0.7)));

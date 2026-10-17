@@ -25,6 +25,8 @@ from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.events import Events, ET
+from openpilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
+from openpilot.selfdrive.controls.lib.steering_speed_alert import SteeringSpeedAlert
 from openpilot.selfdrive.controls.lib.alertmanager import AlertManager, set_offroad_alert
 from openpilot.selfdrive.controls.lib.vehicle_model import VehicleModel
 from openpilot.system.hardware import HARDWARE
@@ -142,6 +144,8 @@ class Controls:
     self.CS_prev = car.CarState.new_message()
     self.AM = AlertManager()
     self.events = Events()
+    self.e2e_alerts = E2EAlertsHelper()
+    self.steering_speed_alert = SteeringSpeedAlert(32 * CV.MPH_TO_MS, CV.MPH_TO_MS)
 
     self.LoC = LongControl(self.CP)
     self.VM = VehicleModel(self.CP)
@@ -429,6 +433,27 @@ class Controls:
 
       if self.sm['modelV2'].frameDropPerc > 20:
         self.events.add(EventName.modeldLagging)
+
+  def update_driver_notifications(self, CS):
+    # These are informational events only; they never enable or control the car.
+    allowed = self.initialized and not self.read_only and not self.joystick_mode and not self.CP.notCar
+    valid_car = CS.canValid and not CS.canTimeout
+    forward_gear = CS.gearShifter in (car.CarState.GearShifter.drive, car.CarState.GearShifter.sport,
+                                    car.CarState.GearShifter.low, car.CarState.GearShifter.manumatic)
+    if self.steering_speed_alert.update(CS.vEgo, allowed and valid_car and forward_gear and self.enabled and
+                                       self.params.get_bool("SteeringSpeedChime")):
+      self.events.add(EventName.steeringSpeedChime)
+
+    if self.e2e_alerts.update(now=self.sm.frame * DT_CTRL, CS=CS, lead=self.sm['radarState'].leadOne,
+                              model_x=self.sm['modelV2'].position.x,
+                              model_time=self.sm.rcv_frame['modelV2'] * DT_CTRL,
+                              radar_time=self.sm.rcv_frame['radarState'] * DT_CTRL,
+                              valid=valid_car and self.sm.all_checks(['modelV2', 'radarState']) and
+                                    not self.sm['radarState'].radarErrors,
+                              lead_enabled=self.params.get_bool("LeadDepartAlert"),
+                              green_light_enabled=self.params.get_bool("GreenLightAlert"),
+                              allowed=allowed and forward_gear):
+      self.events.add(EventName.e2eLongStart)
 
   def data_sample(self):
     """Receive data from sockets and update carState"""
@@ -875,6 +900,8 @@ class Controls:
       # Update control state
       self.state_transition(CS)
       self.prof.checkpoint("State transition")
+
+    self.update_driver_notifications(CS)
 
     # Compute actuators (runs PID loops and lateral MPC)
     CC, lac_log = self.state_control(CS)

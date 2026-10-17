@@ -18,17 +18,18 @@
 
 // Projects a point in car to space to the corresponding point in full frame
 // image space.
-static bool calib_frame_to_full_frame(const UIState *s, float in_x, float in_y, float in_z, QPointF *out) {
+static bool calib_frame_to_full_frame(const UIState *s, float in_x, float in_y, float in_z, QPointF *out, bool clip = true) {
   const float margin = 500.0f;
   const QRectF clip_region{-margin, -margin, s->fb_w + 2 * margin, s->fb_h + 2 * margin};
 
   const vec3 pt = (vec3){{in_x, in_y, in_z}};
   const vec3 Ep = matvecmul3(s->scene.wide_cam ? s->scene.view_from_wide_calib : s->scene.view_from_calib, pt);
   const vec3 KEp = matvecmul3(s->scene.wide_cam ? ECAM_INTRINSIC_MATRIX : FCAM_INTRINSIC_MATRIX, Ep);
+  if (!clip && KEp.v[2] <= 0) return false;
 
   // Project.
   QPointF point = s->car_space_transform.map(QPointF{KEp.v[0] / KEp.v[2], KEp.v[1] / KEp.v[2]});
-  if (clip_region.contains(point)) {
+  if (clip ? clip_region.contains(point) : (std::isfinite(point.x()) && std::isfinite(point.y()))) {
     *out = point;
     return true;
   }
@@ -79,6 +80,27 @@ void update_line_data(const UIState *s, const cereal::XYZTData::Reader &line,
   *pvd = left_points + right_points;
 }
 
+static void update_lane_region(const UIState *s, const cereal::XYZTData::Reader &left_line,
+                               const cereal::XYZTData::Reader &right_line, QPolygonF *vertices, int max_idx) {
+  QPolygonF left_points, right_points;
+  for (int i = 0; i <= max_idx; ++i) {
+    if (left_line.getX()[i] < 0 || right_line.getX()[i] < 0) continue;
+
+    QPointF left, right;
+    const bool l = calib_frame_to_full_frame(s, left_line.getX()[i], left_line.getY()[i], left_line.getZ()[i], &left, false);
+    const bool r = calib_frame_to_full_frame(s, right_line.getX()[i], right_line.getY()[i], right_line.getZ()[i], &right, false);
+    if (l && r) {
+      // Avoid folding the filled lane over itself at a hill crest.
+      if (!left_points.isEmpty() && (left.y() > left_points.back().y() || right.y() > right_points.front().y())) continue;
+      left_points.push_back(left);
+      right_points.push_front(right);
+    }
+  }
+  // Clip the complete region so an offscreen outer boundary does not hide the visible part of the lane.
+  const QPolygonF lane = left_points + right_points;
+  *vertices = lane.intersected(QPolygonF(QRectF(0, 0, s->fb_w, s->fb_h)));
+}
+
 void update_model(UIState *s,
                   const cereal::ModelDataV2::Reader &model,
                   const cereal::UiPlan::Reader &plan) {
@@ -97,6 +119,12 @@ void update_model(UIState *s,
   for (int i = 0; i < std::size(scene.lane_line_vertices); i++) {
     scene.lane_line_probs[i] = lane_line_probs[i];
     update_line_data(s, lane_lines[i], 0.025 * scene.lane_line_probs[i], 0, &scene.lane_line_vertices[i], max_idx);
+  }
+
+  // Fill the adjacent lanes between their actual model boundaries, not the ego lane.
+  if (scene.blindspot_lane_highlight) {
+    update_lane_region(s, lane_lines[0], lane_lines[1], &scene.blindspot_lane_vertices[0], max_idx);
+    update_lane_region(s, lane_lines[2], lane_lines[3], &scene.blindspot_lane_vertices[1], max_idx);
   }
 
   // update road edges
@@ -217,6 +245,7 @@ void ui_update_params(UIState *s) {
   s->scene.speed_limit_perc_offset = params.getBool("SpeedLimitPercOffset");
   s->scene.show_debug_ui = params.getBool("ShowDebugUI");
   s->scene.debug_snapshot_enabled = params.getBool("EnableDebugSnapshot");
+  s->scene.blindspot_lane_highlight = params.getBool("BlindspotLaneHighlight");
 }
 
 void UIState::updateStatus() {

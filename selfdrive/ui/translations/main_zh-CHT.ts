@@ -1103,6 +1103,46 @@ This may take up to a minute.</source>
         <source>The driving visualization will transition to the road-facing wide-angle camera at low speeds to better show some turns. The Experimental mode logo will also be shown in the top right corner. When a navigation destination is set and the driving model is using it as input, the driving path on the map will turn green.</source>
         <translation>行駛畫面將在低速時切換至道路朝向的廣角鏡頭，以更好地顯示一些轉彎。實驗模式圖示也將顯示在右上角。當設定了導航目的地並且行駛模型正在將其作為輸入時，地圖上的行駛路徑將變為綠色。</translation>
     </message>
+    <message>
+        <source>Red Blindspot Lane Highlight</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Fill the adjacent lane red on the side where your car&apos;s blindspot sensor detects a vehicle. Requires blindspot sensors and visible lane boundaries.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Lead Vehicle Departure Chime</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Play a chime when the vehicle ahead starts moving while you remain stopped. Check the road before proceeding.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Green Light Reminder</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>While stopped without a lead vehicle, play a chime when the driving model changes from stopping to proceeding. This is a model-based reminder, not traffic-light color detection. Check the light and road before proceeding.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Disengage Steering with Cancel</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>On Hyundai, Kia, and Genesis vehicles, immediately disengage steering and cruise when the steering-wheel Cancel button is pressed. Requires a new Set, Resume, or cruise Main button action to engage again. Takes effect after restarting the car.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>32 mph Steering Speed Chime</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Play a noticeable chime when slowing down through 32 mph (51.5 km/h) with sunnypilot engaged. Rearms after speed reaches 33 mph. This is a speed reminder for vehicles with a steering-assist minimum speed, not a measurement of steering availability.</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>Updater</name>
