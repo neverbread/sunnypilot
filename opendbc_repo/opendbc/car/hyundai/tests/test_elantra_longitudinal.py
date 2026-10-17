@@ -2,15 +2,16 @@ import unittest
 from unittest.mock import Mock, patch
 
 from opendbc.can import CANPacker, CANParser
-from opendbc.car import gen_empty_fingerprint, structs
+from opendbc.car import Bus, gen_empty_fingerprint, structs
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.hyundai.hyundaican import create_acc_commands, create_acc_opt
+from opendbc.car.hyundai.hyundaican import create_acc_commands, create_acc_opt, hyundai_checksum
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.values import CAR, HyundaiFlags, HyundaiSafetyFlags, LEGACY_SAFETY_MODE_CAR
 from opendbc.sunnypilot.car.hyundai.elantra_longitudinal import supports_elantra_longitudinal
 from opendbc.sunnypilot.car.hyundai.escc import ESCC_MSG
 from opendbc.sunnypilot.car.hyundai.lead_data_ext import CanLeadData
 from opendbc.sunnypilot.car.hyundai.longitudinal.controller import LongitudinalState
+from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP, HyundaiSafetyFlagsSP
 
 
 Ecu = structs.CarParams.Ecu
@@ -49,6 +50,7 @@ class TestElantraLongitudinalParams(unittest.TestCase):
     self.assertTrue(cp.pcmCruise)
     self.assertEqual(cp.safetyConfigs[-1].safetyModel, structs.CarParams.SafetyModel.hyundaiLegacy)
     self.assertFalse(cp.safetyConfigs[-1].safetyParam & HyundaiSafetyFlags.LONG)
+    self.assertFalse(cp.flags & HyundaiFlags.ELANTRA_GT_LONGITUDINAL)
 
   def test_stock_mode_remains_legacy(self):
     cp = self.get_params()
@@ -57,6 +59,7 @@ class TestElantraLongitudinalParams(unittest.TestCase):
     self.assertTrue(cp.pcmCruise)
     self.assertEqual(cp.safetyConfigs[-1].safetyModel, structs.CarParams.SafetyModel.hyundaiLegacy)
     self.assertFalse(cp.safetyConfigs[-1].safetyParam & HyundaiSafetyFlags.LONG)
+    self.assertFalse(cp.flags & HyundaiFlags.ELANTRA_GT_LONGITUDINAL)
 
   def test_alpha_selects_normal_longitudinal_safety(self):
     cp = self.get_params(alpha=True)
@@ -69,6 +72,7 @@ class TestElantraLongitudinalParams(unittest.TestCase):
     self.assertTrue(cp.flags & HyundaiFlags.LEGACY)
     self.assertTrue(cp.flags & HyundaiFlags.USE_FCA)
     self.assertTrue(cp.flags & HyundaiFlags.MIN_STEER_32_MPH)
+    self.assertTrue(cp.flags & HyundaiFlags.ELANTRA_GT_LONGITUDINAL)
     self.assertAlmostEqual(cp.minSteerSpeed, 32 * CV.MPH_TO_MS, places=5)
     self.assertTrue(cp.radarUnavailable)
     self.assertEqual(cp_sp.safetyParam, 0)
@@ -129,6 +133,18 @@ class TestElantraLongitudinalParams(unittest.TestCase):
   def test_escc_does_not_select_software_only_port(self):
     self.fingerprint[0][ESCC_MSG] = 8
     self.assert_unavailable()
+
+  def test_other_supported_hyundai_does_not_select_variant(self):
+    cp = self.get_params(alpha=True, candidate=CAR.HYUNDAI_SONATA)
+    self.assertTrue(cp.openpilotLongitudinalControl)
+    self.assertFalse(cp.flags & HyundaiFlags.ELANTRA_GT_LONGITUDINAL)
+
+  def test_unrecorded_radar_option_layout_is_rejected(self):
+    for address, length in ((0x483, 8), (0x4a2, 2)):
+      with self.subTest(address=hex(address)):
+        self.fingerprint = recorded_fingerprint()
+        self.fingerprint[0][address] = length
+        self.assert_unavailable()
 
   def test_other_legacy_platforms_remain_unavailable(self):
     for candidate in LEGACY_SAFETY_MODE_CAR - {TARGET}:
@@ -232,7 +248,11 @@ class TestElantraLongitudinalCommands(unittest.TestCase):
       self.assertTrue(all(bus == 0 and len(data) == 8 for _, data, bus in messages))
       self.assertEqual(values['SCC11']['AliveCounterACC'], index % 16)
       self.assertEqual(values['SCC12']['CR_VSM_Alive'], index % 15)
-      self.assertEqual(values['FCA11']['CR_FCA_Alive'], index % 15)
+      # The generic DBC counter position is unused on the recorded legacy FCA.
+      self.assertEqual(values['FCA11']['CR_FCA_Alive'], 0)
+      fca11 = next(data for address, data, _ in messages if address == 0x38d)
+      self.assertEqual(fca11[7] & 15, index % 15)
+      self.assertEqual(sum((byte >> 4) + (byte & 15) for byte in fca11) % 16, 0)
       scc12 = next(data for address, data, _ in messages if address == 0x421)
       self.assertEqual(sum((byte >> 4) + (byte & 15) for byte in scc12) % 16, 0)
       for message, signals in (
@@ -256,9 +276,106 @@ class TestElantraLongitudinalCommands(unittest.TestCase):
   def test_options_report_aeb_disabled(self):
     messages = create_acc_opt(self.packer, self.cp)
     values = self.decode(messages)
+    self.assertEqual({address for address, _, _ in messages}, {0x50a})
+    self.assertEqual(values['SCC13']['SCC_Equip'], 1)
+    self.assertEqual(values['SCC13']['SCCDrvModeRValue'], 2)
+    self.assertEqual(values['SCC13']['Lead_Veh_Dep_Alert_USM'], 0)
+    # This variant reports disabled status in FCA11, not the absent FCA12.
+    self.assertEqual(self.decode(self.commands(0))['FCA11']['FCA_Status'], 1)
+
+  def test_legacy_fca_golden_packets_and_counter_wrap(self):
+    # Derived independently from recorded 00 00 48 00 00 00 00 xx frames:
+    # change only FCA_Status 2 -> 1, then update counter/checksum byte.
+    expected = {
+      0: '0000440000000080', 1: '0000440000000071', 2: '0000440000000062',
+      14: '00004400000000ae', 15: '0000440000000080', 16: '0000440000000071',
+    }
+    for index, payload in expected.items():
+      with self.subTest(index=index):
+        fca = next(data for address, data, _ in self.commands(index) if address == 0x38d)
+        self.assertEqual(fca.hex(), payload)
+
+  def test_other_hyundai_retains_crc_fca_and_options(self):
+    self.cp = CarInterface.get_params(CAR.HYUNDAI_SONATA, recorded_fingerprint(), recorded_firmware(), True, False, False)
+    for index in range(32):
+      messages = self.commands(index)
+      values = self.decode(messages, index)
+      fca = next(data for address, data, _ in messages if address == 0x38d)
+      self.assertEqual(fca[7], hyundai_checksum(fca[:7]))
+      self.assertEqual(values['FCA11']['CR_FCA_Alive'], index % 15)
+      self.assertEqual(values['FCA11']['PAINT1_Status'], 1)
+    messages = create_acc_opt(self.packer, self.cp)
+    values = self.decode(messages, 32)
     self.assertEqual({address for address, _, _ in messages}, {0x50a, 0x483})
     self.assertEqual(values['FCA12']['FCA_USM'], 1)
-    self.assertEqual(values['SCC13']['SCC_Equip'], 1)
+    self.assertEqual(values['SCC13']['Lead_Veh_Dep_Alert_USM'], 2)
+
+
+class TestElantraLongitudinalRuntime(unittest.TestCase):
+  def setUp(self):
+    fingerprint, firmware = recorded_fingerprint(), recorded_firmware()
+    cp = CarInterface.get_params(TARGET, fingerprint, firmware, True, False, False)
+    cp_sp = CarInterface.get_params_sp(cp, TARGET, fingerprint, firmware, True, False)
+    # card sets these after get_params; test the actual runtime configuration.
+    cp_sp.flags |= HyundaiFlagsSP.LONGITUDINAL_MAIN_CRUISE_TOGGLEABLE
+    cp_sp.safetyParam |= HyundaiSafetyFlagsSP.LONG_MAIN_CRUISE_TOGGLEABLE
+    self.ci = CarInterface(cp, cp_sp)
+    self.packer = CANPacker('hyundai_kia_generic')
+    self.frame = 0
+
+  def update(self, main=0, button=0, brake=False, gas=False, fault=0):
+    overrides = {
+      'CLU11': {'CF_Clu_CruiseSwMain': main, 'CF_Clu_CruiseSwState': button},
+      'TCS13': {'ACCEnable': fault, 'DriverOverride': 2 if brake else 0},
+      'EMS16': {'CF_Ems_AclAct': int(gas)},
+      'WHL_SPD11': {key: 50 for key in ('WHL_SPD_FL', 'WHL_SPD_FR', 'WHL_SPD_RL', 'WHL_SPD_RR')},
+    }
+    # Supply every configured chassis/camera message; never supply radar output.
+    messages = [self.packer.make_can_msg(state.name, 2 if bus == Bus.cam else 0, overrides.get(state.name, {}))
+                for bus, parser in self.ci.can_parsers.items() for state in parser.message_states.values()]
+    self.assertFalse({address for address, _, _ in messages} & {0x420, 0x421, 0x389, 0x38d, 0x50a, 0x483, 0x4a2})
+    self.frame += 1
+    return self.ci.update([(self.frame * 10_000_000, messages)])[0]
+
+  def test_chassis_states_remain_available_without_radar(self):
+    for _ in range(100):
+      state = self.update()
+    self.assertTrue(state.canValid)
+    self.assertFalse(state.canTimeout)
+    self.assertFalse(state.accFaulted)
+    self.assertAlmostEqual(state.vEgo, 50 / 3.6, places=2)
+    self.assertFalse(state.cruiseState.available)
+    self.assertTrue(self.update(main=1).cruiseState.available)
+    self.assertTrue(self.update(main=1).cruiseState.available)
+    self.update()
+    self.assertTrue(self.update(brake=True).brakePressed)
+    self.assertFalse(self.update().brakePressed)
+    self.assertTrue(self.update(gas=True).gasPressed)
+    self.assertFalse(self.update().gasPressed)
+    state = self.update(fault=1)
+    self.assertTrue(state.accFaulted)
+    self.assertFalse(state.cruiseState.available)
+    self.assertTrue(self.update().cruiseState.available)
+    self.assertFalse(self.update(main=1).cruiseState.available)
+
+  def test_controller_schedule_and_legacy_fca(self):
+    from collections import Counter
+
+    counts = Counter()
+    cc, cc_sp = structs.CarControl(), structs.CarControlSP()
+    for frame in range(100):
+      self.update(main=int(frame == 0))
+      _, messages = self.ci.apply(cc.as_reader(), cc_sp, self.frame * 10_000_000)
+      for address, data, bus in messages:
+        self.assertEqual(bus, 0)
+        counts[address] += 1
+        if address == 0x38d:
+          self.assertEqual(data[:7], bytes.fromhex('00004400000000'))
+          self.assertEqual(data[7] & 15, (frame // 2) % 15)
+          self.assertEqual(sum((byte >> 4) + (byte & 15) for byte in data) % 16, 0)
+        elif address == 0x7d0:
+          self.assertEqual(data, bytes.fromhex('023e800000000000'))
+    self.assertEqual(counts, {0x340: 100, 0x420: 50, 0x421: 50, 0x389: 50, 0x38d: 50, 0x50a: 5, 0x7d0: 1})
 
 
 if __name__ == '__main__':

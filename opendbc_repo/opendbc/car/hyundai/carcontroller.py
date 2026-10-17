@@ -173,7 +173,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       can_sends.extend(hyundaican.create_acc_opt(self.packer, self.CP, self.ESCC))
 
     # 2 Hz front radar options
-    if self.frame % 50 == 0 and self.CP.openpilotLongitudinalControl and not self.ESCC.enabled:
+    # No FRT_RADAR11 is present on the recorded Elantra radar/ESC configuration.
+    if (self.frame % 50 == 0 and self.CP.openpilotLongitudinalControl and not self.ESCC.enabled and
+        not self.CP.flags & HyundaiFlags.ELANTRA_GT_LONGITUDINAL):
       can_sends.append(hyundaican.create_frt_radar_opt(self.packer))
 
     return can_sends

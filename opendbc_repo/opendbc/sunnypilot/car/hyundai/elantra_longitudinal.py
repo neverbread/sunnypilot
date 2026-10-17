@@ -26,7 +26,9 @@ def supports_elantra_longitudinal(candidate, fingerprint, car_fw) -> bool:
   if candidate != CAR.HYUNDAI_ELANTRA_GT_I30:
     return False
   bus_zero = fingerprint.get(0, {})
-  if 0x2AB in bus_zero or any(bus_zero.get(addr) != 8 for addr in ELANTRA_LONG_MESSAGES):
+  # Both recorded segments lack FCA12 and FRT_RADAR11. The port deliberately
+  # omits them; a different observed message layout needs its own validation.
+  if any(addr in bus_zero for addr in (0x2AB, 0x483, 0x4A2)) or any(bus_zero.get(addr) != 8 for addr in ELANTRA_LONG_MESSAGES):
     return False
 
   for (ecu, address), expected in ELANTRA_LONG_FW.items():

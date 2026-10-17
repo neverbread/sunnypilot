@@ -90,6 +90,10 @@ class HyundaiFlags(IntFlag):
   USE_FCA = 2 ** 8
   CANFD_LKA_STEERING_ALT = 2 ** 9
 
+  # Recorded G3100 radar/G3350 ESC software-only port: legacy FCA11 and no
+  # FCA12/FRT_RADAR11. Set dynamically only after the firmware/topology gate.
+  ELANTRA_GT_LONGITUDINAL = 2 ** 27
+
   # these cars use a different gas signal
   HYBRID = 2 ** 10
   EV = 2 ** 11

@@ -195,6 +195,19 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, lead_data: CanL
     }
 
   def calculate_fca11_checksum(values):
+    if CP.flags & HyundaiFlags.ELANTRA_GT_LONGITUDINAL:
+      # G3100 captures use bits 56..59 for the modulo-15 counter and bits
+      # 60..63 for the nibble checksum. Bits 35..38 and PAINT1 stay zero.
+      # The generic DBC's 8-bit checksum field covers BOTH legacy fields.
+      # See commaai/opendbc#656: older FCA11 variants retain this layout.
+      values["CR_FCA_Alive"] = 0
+      values["PAINT1_Status"] = 0
+      values["CR_FCA_ChkSum"] = idx % 0xF
+      dat = packer.make_can_msg("FCA11", 0, values)[1]
+      checksum = -sum((byte >> 4) + (byte & 0xF) for byte in dat) & 0xF
+      values["CR_FCA_ChkSum"] |= checksum << 4
+      return values
+
     fca11_dat = packer.make_can_msg("FCA11", 0, values)[1]
     values["CR_FCA_ChkSum"] = hyundai_checksum(fca11_dat[:7])
     return values
@@ -234,7 +247,7 @@ def create_acc_opt(packer, CP, ESCC: EnhancedSmartCruiseControl = None):
     return {
       "SCCDrvModeRValue": 2,
       "SCC_Equip": 1,
-      "Lead_Veh_Dep_Alert_USM": 2,
+      "Lead_Veh_Dep_Alert_USM": 0 if CP.flags & HyundaiFlags.ELANTRA_GT_LONGITUDINAL else 2,
     }
 
   def get_fca12_values():
@@ -253,8 +266,9 @@ def create_acc_opt(packer, CP, ESCC: EnhancedSmartCruiseControl = None):
     return commands
 
   # TODO: this needs to be detected and conditionally sent on unsupported long cars
+  # The gated Elantra variant has no stock FCA12; disabled status is in FCA11.
   # On Camera SCC cars, FCA12 is not disabled, so we forward stock FCA12 back to the car forward hooks
-  if not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  if not (CP.flags & (HyundaiFlags.CAMERA_SCC | HyundaiFlags.ELANTRA_GT_LONGITUDINAL)):
     fca12_values = get_fca12_values()
     commands.append(packer.make_can_msg("FCA12", 0, fca12_values))
 

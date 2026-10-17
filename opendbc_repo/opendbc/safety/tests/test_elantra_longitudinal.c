@@ -23,15 +23,21 @@ static CANPacket_t packet(uint32_t address, uint8_t bus, uint8_t length) {
   return msg;
 }
 
-static void configure(uint16_t extra_flags, bool mads) {
-  set_current_safety_param_sp(0U);
+static void configure_with_sp(uint16_t extra_flags, bool mads, uint16_t param_sp) {
+  set_current_safety_param_sp(param_sp);
   CHECK(set_safety_hooks(SAFETY_HYUNDAI, LONG_PARAM | extra_flags) == 0);
   init_tests();
+  // init_tests resets this metadata; retain the configuration the hooks read.
+  set_current_safety_param_sp(param_sp);
   set_mads_params(mads, false, false);
   set_controls_allowed_lat(mads);
   set_controls_requested_lat(mads);
   CHECK(hyundai_longitudinal);
   CHECK(!hyundai_legacy);
+}
+
+static void configure(uint16_t extra_flags, bool mads) {
+  configure_with_sp(extra_flags, mads, 0U);
 }
 
 static CANPacket_t acceleration(int raw, int value) {
@@ -49,6 +55,16 @@ static void receive_button(uint8_t button, uint8_t counter) {
   msg.data[0] = button;
   msg.data[3] = (counter & 0xFU) << 4U;
   CHECK(safety_rx_hook(&msg));
+}
+
+static void receive_main_button(bool pressed, uint8_t counter) {
+  receive_button(pressed ? 8U : 0U, counter);
+}
+
+static void send_main_state(bool enabled) {
+  CANPacket_t msg = packet(0x420U, 0U, 8U);
+  msg.data[0] = enabled ? 1U : 0U;
+  CHECK(safety_tx_hook(&msg));
 }
 
 static void receive_brake(bool pressed, uint8_t counter) {
@@ -245,6 +261,98 @@ static void test_checked_receivers(uint16_t extra_flags) {
   CHECK(!get_controls_allowed());
 }
 
+static void test_runtime_main_cruise_configuration(uint16_t extra_flags) {
+  // card adds this SP flag after constructing CarParams on the actual car.
+  // Exercise it together with LONG and the optional OBD telemetry selection.
+  for (unsigned int mads = 0U; mads < 2U; mads++) {
+    configure_with_sp(extra_flags, mads != 0U, HYUNDAI_PARAM_SP_LONGITUDINAL_MAIN_CRUISE_TOGGLEABLE);
+    set_mads_params(mads != 0U, false, false);
+    CHECK(hyundai_longitudinal_main_cruise_toggleable);
+    CHECK(hyundai_engine_temperatures == ((extra_flags & HYUNDAI_PARAM_ENGINE_TEMPERATURES) != 0U));
+    CHECK(safety_uses_obd_can2() == hyundai_engine_temperatures);
+
+    CANPacket_t positive = acceleration(100, 100);
+    CANPacket_t negative = acceleration(-100, -100);
+    CANPacket_t zero = acceleration(0, 0);
+    receive_main_button(false, 0U);
+    CHECK(!get_acc_main_on());
+    CHECK(!get_controls_allowed());
+    CHECK(!get_controls_allowed_lat());
+
+    receive_main_button(true, 1U);
+    CHECK(get_acc_main_on());
+    CHECK(!get_controls_allowed());  // Main alone never authorizes acceleration.
+    CHECK(!safety_tx_hook(&positive));
+    CHECK(get_controls_allowed_lat() == (mads != 0U));
+    receive_main_button(true, 2U);  // Holding Main must not toggle repeatedly.
+    CHECK(get_acc_main_on());
+    receive_main_button(false, 3U);
+    send_main_state(true);
+    CHECK(get_acc_main_on_mismatches() == 0U);
+
+    receive_button(HYUNDAI_BTN_SET, 4U);
+    CHECK(!get_controls_allowed());
+    receive_button(HYUNDAI_BTN_NONE, 5U);
+    CHECK(get_controls_allowed());
+    CHECK(safety_tx_hook(&positive));
+    CHECK(safety_tx_hook(&negative));
+    receive_button(HYUNDAI_BTN_CANCEL, 6U);
+    CHECK(!get_controls_allowed());
+    CHECK(!safety_tx_hook(&positive));
+    CHECK(!safety_tx_hook(&negative));
+    CHECK(safety_tx_hook(&zero));
+    CHECK(get_acc_main_on());  // Cancel leaves Main enabled for a later Resume.
+    send_main_state(true);
+    CHECK(get_acc_main_on_mismatches() == 0U);
+    receive_button(HYUNDAI_BTN_RESUME, 7U);
+    CHECK(!get_controls_allowed());
+    receive_button(HYUNDAI_BTN_NONE, 8U);
+    CHECK(get_controls_allowed());
+    CHECK(safety_tx_hook(&positive));
+
+    receive_main_button(true, 9U);
+    CHECK(!get_acc_main_on());
+    CHECK(!get_controls_allowed_lat());
+    send_main_state(false);
+    CHECK(get_acc_main_on_mismatches() == 0U);
+    receive_button(HYUNDAI_BTN_CANCEL, 10U);
+    CHECK(!get_controls_allowed());
+    receive_main_button(true, 11U);
+    CHECK(get_acc_main_on());
+    receive_main_button(false, 12U);
+
+    // A transient old SCC11 main state is tolerated and a matching update resets it.
+    send_main_state(false);
+    send_main_state(false);
+    CHECK(get_acc_main_on());
+    CHECK(get_acc_main_on_mismatches() == 2U);
+    send_main_state(true);
+    CHECK(get_acc_main_on_mismatches() == 0U);
+    CHECK(get_controls_allowed_lat() == (mads != 0U));
+
+    // Three contradictory controller frames remove lateral permission. A later
+    // CAN/button update must not silently re-enable it without a new action.
+    send_main_state(false);
+    send_main_state(false);
+    send_main_state(false);
+    CHECK(!get_acc_main_on());
+    CHECK(!get_controls_allowed_lat());
+    receive_main_button(false, 13U);
+    CHECK(!get_acc_main_on());
+    CHECK(!get_controls_allowed_lat());
+    send_main_state(false);
+    CHECK(get_acc_main_on_mismatches() == 0U);
+    receive_main_button(true, 14U);
+    receive_main_button(false, 15U);
+    CHECK(get_acc_main_on());
+    CHECK(get_controls_allowed_lat() == (mads != 0U));
+    send_main_state(true);
+    CHECK(get_acc_main_on_mismatches() == 0U);
+    CHECK(!get_controls_allowed());
+    CHECK(!safety_tx_hook(&positive));
+  }
+}
+
 int main(void) {
   for (uint16_t telemetry = 0U; telemetry <= HYUNDAI_PARAM_ENGINE_TEMPERATURES; telemetry += HYUNDAI_PARAM_ENGINE_TEMPERATURES) {
     test_acceleration_enforcement(telemetry);
@@ -253,6 +361,7 @@ int main(void) {
     test_aeb_rejected(telemetry);
     test_only_tester_present(telemetry);
     test_checked_receivers(telemetry);
+    test_runtime_main_cruise_configuration(telemetry);
   }
   printf("PASS: %u Elantra longitudinal safety regression checks\n", checks);
   return 0;
