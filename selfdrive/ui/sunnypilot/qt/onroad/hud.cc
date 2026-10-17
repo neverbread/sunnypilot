@@ -9,6 +9,8 @@
 
 #include <cmath>
 
+#include <QPainterPath>
+
 #include "common/timing.h"
 #include "selfdrive/ui/qt/onroad/buttons.h"
 #include "selfdrive/ui/qt/util.h"
@@ -24,6 +26,7 @@ void HudRendererSP::updateState(const UIState &s) {
   show_engine_temperatures = false;
   show_dct_temperatures = false;
   show_boost = false;
+  oil_background = Qt::transparent;
   if (!current_drive) return;
   const auto temperatures = sm["engineTemperature"].getEngineTemperature();
   // Hide supplementary readings during alerts and while selfdrive is unavailable.
@@ -45,7 +48,14 @@ void HudRendererSP::updateState(const UIState &s) {
                             : QStringLiteral("\u2014");
     return value + unit;
   };
-  oil_temperature = temperature_text(temperatures.getOilCelsius(), temperatures.getOilValid());
+  const float oil_celsius = temperatures.getOilCelsius();
+  oil_temperature = temperature_text(oil_celsius, temperatures.getOilValid());
+  if (fresh && temperatures.getOilValid() && std::isfinite(oil_celsius)) {
+    // 140 F = 60 C; 176 F = 80 C. Use the unrounded reading in either display unit.
+    // A light tint over the dark card preserves transparency and bright text.
+    oil_background = oil_celsius <= 60.0f ? QColor(255, 145, 145, 50) :
+                     oil_celsius <= 80.0f ? QColor(255, 221, 128, 50) : QColor(144, 238, 168, 50);
+  }
   coolant_temperature = temperature_text(temperatures.getCoolantCelsius(), temperatures.getCoolantValid());
   clutch1_temperature = temperature_text(temperatures.getClutch1Celsius(), temperatures.getClutch1Valid());
   clutch2_temperature = temperature_text(temperatures.getClutch2Celsius(), temperatures.getClutch2Valid());
@@ -78,7 +88,15 @@ void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) 
   p.setBrush(QColor(0, 0, 0, 150));
   p.drawRoundedRect(card, 24, 24);
   int row = 0;
-  auto draw_reading = [&](const QString &label, const QString &value) {
+  auto draw_reading = [&](const QString &label, const QString &value, const QColor &background = QColor(Qt::transparent)) {
+    if (background.alpha() > 0) {
+      p.save();
+      QPainterPath card_clip;
+      card_clip.addRoundedRect(card, 24, 24);
+      p.setClipPath(card_clip, Qt::IntersectClip);
+      p.fillRect(QRect(card.x(), card.y() + row * row_height, card.width(), row_height), background);
+      p.restore();
+    }
     const int top_padding = compact ? 8 : 12;
     const int top = card.y() + top_padding + row * row_height;
     if (row > 0) {
@@ -100,7 +118,7 @@ void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) 
     ++row;
   };
   if (show_engine_temperatures) {
-    draw_reading(tr("OIL"), oil_temperature);
+    draw_reading(tr("OIL"), oil_temperature, oil_background);
     draw_reading(tr("COOLANT"), coolant_temperature);
   }
   if (show_dct_temperatures) {

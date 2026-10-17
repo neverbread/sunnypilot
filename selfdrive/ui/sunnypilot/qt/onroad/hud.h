@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <QColor>
 #include <QPainter>
 
 #include "selfdrive/ui/qt/onroad/hud.h"
@@ -24,6 +25,7 @@ private:
   bool show_engine_temperatures = false;
   bool show_dct_temperatures = false;
   bool show_boost = false;
+  QColor oil_background = Qt::transparent;
   QString oil_temperature;
   QString coolant_temperature;
   QString clutch1_temperature;
