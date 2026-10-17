@@ -7,6 +7,7 @@
 
 #include "selfdrive/ui/sunnypilot/qt/onroad/hud.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include <QPainterPath>
@@ -14,6 +15,15 @@
 #include "common/timing.h"
 #include "selfdrive/ui/qt/onroad/buttons.h"
 #include "selfdrive/ui/qt/util.h"
+
+namespace {
+constexpr double KPA_TO_PSI = 0.14503773800722;
+// Estimated stock-range display endpoint, not a verified factory limit.
+// N75 describes stock-level boost around 18 psi, occasionally 19 psi:
+// https://n75motorsports.ca/products/ecu-tuning-elantra-sport-gtsport-nline
+constexpr double BOOST_FULL_RED_PSI = 19.0;
+constexpr double VACUUM_FULL_BLUE_KPA = 101.325;  // Sea-level full vacuum, about -14.7 psi gauge.
+}  // namespace
 
 HudRendererSP::HudRendererSP() {}
 
@@ -27,6 +37,7 @@ void HudRendererSP::updateState(const UIState &s) {
   show_dct_temperatures = false;
   show_boost = false;
   oil_background = Qt::transparent;
+  boost_background = Qt::transparent;
   if (!current_drive) return;
   const auto temperatures = sm["engineTemperature"].getEngineTemperature();
   // Hide supplementary readings during alerts and while selfdrive is unavailable.
@@ -60,10 +71,19 @@ void HudRendererSP::updateState(const UIState &s) {
   clutch1_temperature = temperature_text(temperatures.getClutch1Celsius(), temperatures.getClutch1Valid());
   clutch2_temperature = temperature_text(temperatures.getClutch2Celsius(), temperatures.getClutch2Valid());
   const float boost_kpa = temperatures.getBoostKpa();
-  const QString boost_value = fresh && temperatures.getBoostValid() && std::isfinite(boost_kpa)
-                                ? QString::number(is_metric ? boost_kpa : boost_kpa * 0.14503773800722, 'f', 1)
+  const bool boost_valid = fresh && temperatures.getBoostValid() && std::isfinite(boost_kpa);
+  const double boost_psi = boost_kpa * KPA_TO_PSI;
+  const QString boost_value = boost_valid
+                                ? QString::number(is_metric ? boost_kpa : boost_psi, 'f', 1)
                                 : QStringLiteral("\u2014");
   boost_pressure = boost_value + (is_metric ? QStringLiteral(" kPa") : QStringLiteral(" psi"));
+  if (boost_valid) {
+    const double fraction = std::clamp(boost_kpa < 0.0f ? -boost_kpa / VACUUM_FULL_BLUE_KPA : boost_psi / BOOST_FULL_RED_PSI, 0.0, 1.0);
+    // Emphasize modest pressures for peripheral visibility, fading to neutral
+    // at zero. Cap only the tint; the numeric reading remains unrestricted.
+    const int alpha = static_cast<int>(std::lround(190.0 * std::sqrt(fraction)));
+    boost_background = boost_kpa < 0.0f ? QColor(35, 105, 245, alpha) : QColor(230, 45, 55, alpha);
+  }
 }
 
 void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
@@ -94,7 +114,9 @@ void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) 
       QPainterPath card_clip;
       card_clip.addRoundedRect(card, 24, 24);
       p.setClipPath(card_clip, Qt::IntersectClip);
-      p.fillRect(QRect(card.x(), card.y() + row * row_height, card.width(), row_height), background);
+      const int row_top = card.y() + row * row_height;
+      const int row_bottom = row == row_count - 1 ? card.bottom() + 1 : row_top + row_height;
+      p.fillRect(QRect(card.x(), row_top, card.width(), row_bottom - row_top), background);
       p.restore();
     }
     const int top_padding = compact ? 8 : 12;
@@ -126,7 +148,7 @@ void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) 
     draw_reading(tr("CLUTCH 2"), clutch2_temperature);
   }
   if (show_boost) {
-    draw_reading(tr("BOOST"), boost_pressure);
+    draw_reading(tr("BOOST"), boost_pressure, boost_background);
   }
   p.restore();
 }
