@@ -72,6 +72,7 @@ void ui_update_params(UIState *s) {
   s->scene.blindspot_lane_highlight = params.getBool("BlindspotLaneHighlight");
   s->scene.engine_temperature_display = params.getBool("EngineTemperatureDisplay");
   s->scene.dct_temperature_display = params.getBool("DctTemperatureDisplay");
+  s->scene.boost_display = params.getBool("BoostDisplay");
 }
 
 void UIState::updateStatus() {

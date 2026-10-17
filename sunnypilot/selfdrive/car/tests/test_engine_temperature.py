@@ -1,6 +1,7 @@
 """Transport/decoder tests runnable without cereal, native CAN, or hardware."""
 
 import importlib.util
+import itertools
 from pathlib import Path
 import unittest
 
@@ -90,7 +91,8 @@ class TestEngineTemperature(unittest.TestCase):
     self.assertEqual(self.reader.readings(1.2), {"oilCelsius": 87.75, "oilValid": True,
                                               "coolantCelsius": 86.0, "coolantValid": True,
                                               "clutch1Celsius": 0.0, "clutch1Valid": False,
-                                              "clutch2Celsius": 0.0, "clutch2Valid": False})
+                                              "clutch2Celsius": 0.0, "clutch2Valid": False,
+                                              "boostKpa": 0.0, "boostValid": False})
 
   def test_poll_cadence_with_no_replies(self):
     for index in range(100):
@@ -246,6 +248,134 @@ class TestEngineTemperature(unittest.TestCase):
     self.assertFalse(self.reader.readings(5.0)["coolantValid"])
     self.assertEqual(self.reader.update(4.0, []), [temperature.COOLANT_REQUEST])
     self.assert_unavailable(4.0)
+
+
+class TestBoost(unittest.TestCase):
+  def setUp(self):
+    self.reader = temperature.EngineTemperatureReader(engine_enabled=False, boost_enabled=True)
+
+  def test_recorded_fallback_then_cached_barometer(self):
+    self.assertEqual(self.reader.update(0.0, []), [temperature.PRESSURE_REQUEST])
+    self.reader.update(0.1, [single_frame(COOLANT_PAYLOAD)])
+    self.assertAlmostEqual(self.reader.readings(0.1)["boostKpa"], -58.325)
+    self.assertTrue(self.reader.readings(0.1)["boostValid"])
+    self.assertFalse(self.reader.readings(0.1)["coolantValid"])
+    self.assertEqual(self.reader.update(0.5, []), [temperature.BAROMETER_REQUEST])
+    self.reader.update(0.6, [single_frame(bytes.fromhex("413365"))])
+    # Ambient pressure alone must not recalculate or refresh the last MAP sample.
+    self.assertAlmostEqual(self.reader.readings(0.6)["boostKpa"], -58.325)
+    self.assertEqual(self.reader.update(1.0, []), [temperature.PRESSURE_REQUEST])
+    self.reader.update(1.1, [single_frame(COOLANT_PAYLOAD)])
+    self.assertEqual(self.reader.readings(1.1)["boostKpa"], -58.0)
+    # The same reference produces positive boost when MAP is above ambient.
+    self.reader.update(1.5, [])
+    self.reader.update(1.6, [single_frame(bytes.fromhex("41057E0B95"))])
+    self.assertEqual(self.reader.readings(1.6)["boostKpa"], 48.0)
+
+  def test_combined_reply_updates_coolant_only_when_enabled(self):
+    reader = temperature.EngineTemperatureReader(engine_enabled=True, boost_enabled=True)
+    reader.update(0.0, [])
+    reader.update(0.1, [single_frame(COOLANT_PAYLOAD)])
+    self.assertEqual(reader.readings(0.1)["coolantCelsius"], 86.0)
+    self.assertTrue(reader.readings(0.1)["coolantValid"])
+    self.assertTrue(reader.readings(0.1)["boostValid"])
+
+  def test_exact_pressure_and_barometer_replies(self):
+    for payload in (b"", COOLANT_PAYLOAD[:3], COOLANT_PAYLOAD[:-1], COOLANT_PAYLOAD + b"\x00",
+                    bytes.fromhex("41057E0C2B"), bytes.fromhex("42057E0B2B"), bytes.fromhex("410B2B")):
+      with self.subTest(payload=payload.hex()):
+        self.assertIsNone(temperature.decode_manifold_pressure(payload))
+        self.reader.reset()
+        self.reader.update(0.0, [])
+        self.reader.update(0.1, [single_frame(payload)])
+        self.assertFalse(self.reader.readings(0.1)["boostValid"])
+    for payload in (b"", bytes.fromhex("4133"), bytes.fromhex("413300"), bytes.fromhex("41336500"),
+                    bytes.fromhex("413465"), bytes.fromhex("423365")):
+      self.assertIsNone(temperature.decode_barometric_pressure(payload))
+
+  def test_wrong_ecu_bus_negative_response_and_multiframe_rejected(self):
+    response = single_frame(COOLANT_PAYLOAD)
+    for frames in ([frame(response[1], 0x7E9)], [frame(response[1], bus=0)], [frame(response[1], bus=2)],
+                   [single_frame(bytes.fromhex("7F0111"))], [single_frame(bytes.fromhex("7F0178"))], oil_frames()):
+      with self.subTest(frames=frames):
+        self.reader.reset()
+        self.reader.update(0.0, [])
+        self.assertEqual(self.reader.update(0.1, frames), [])
+        self.assertFalse(self.reader.readings(0.1)["boostValid"])
+
+  def test_barometer_retained_on_failed_refresh_and_cleared_on_reset(self):
+    self.reader.update(0.0, [])
+    self.reader.update(0.5, [])
+    self.reader.update(0.6, [single_frame(bytes.fromhex("413365"))])
+    self.assertFalse(self.reader.readings(0.6)["boostValid"])
+    self.reader.update(1.0, [])
+    self.reader.update(1.1, [single_frame(COOLANT_PAYLOAD)])
+    self.assertEqual(self.reader.readings(1.1)["boostKpa"], -58.0)
+    for tick in range(3, 122):
+      self.reader.update(tick / 2, [])
+    self.reader.update(60.6, [single_frame(bytes.fromhex("413300"))])
+    self.reader.update(61.0, [])
+    self.reader.update(61.1, [single_frame(COOLANT_PAYLOAD)])
+    self.assertEqual(self.reader.readings(61.1)["boostKpa"], -58.0)
+    self.reader.update(61.2, [], enabled=False)
+    self.assertFalse(self.reader.readings(61.2)["boostValid"])
+    self.reader.update(62.0, [])
+    self.reader.update(62.1, [single_frame(COOLANT_PAYLOAD)])
+    self.assertAlmostEqual(self.reader.readings(62.1)["boostKpa"], -58.325)
+
+  def test_boost_expires_without_new_map_despite_fresh_barometer(self):
+    self.reader.update(0.0, [])
+    self.reader.update(0.1, [single_frame(COOLANT_PAYLOAD)])
+    self.reader.update(0.5, [])
+    self.reader.update(0.6, [single_frame(bytes.fromhex("413365"))])
+    self.assertTrue(self.reader.readings(2.09)["boostValid"])
+    self.assertFalse(self.reader.readings(2.1)["boostValid"])
+    self.assertEqual(self.reader.readings(2.1)["boostKpa"], 0.0)
+    self.assertFalse(self.reader.readings(0.09)["boostValid"])
+
+  def test_no_reply_timeout_no_catchup_and_clock_reset(self):
+    self.reader.update(0.0, [])
+    self.assertEqual(self.reader.update(0.5, [single_frame(COOLANT_PAYLOAD)]), [temperature.BAROMETER_REQUEST])
+    self.assertFalse(self.reader.readings(0.5)["boostValid"])
+    self.assertEqual(self.reader.update(100.0, []), [temperature.PRESSURE_REQUEST])
+    self.assertEqual(self.reader.update(100.1, []), [])
+    self.assertEqual(self.reader.update(99.0, []), [temperature.PRESSURE_REQUEST])
+    self.reader.update(99.1, [single_frame(COOLANT_PAYLOAD)])
+    self.assertAlmostEqual(self.reader.readings(99.1)["boostKpa"], -58.325)
+
+  def test_all_toggle_combinations_keep_enabled_readings_fresh(self):
+    replies = {temperature.COOLANT_REQUEST: [single_frame(COOLANT_PAYLOAD[:3])],
+               temperature.PRESSURE_REQUEST: [single_frame(COOLANT_PAYLOAD)],
+               temperature.BAROMETER_REQUEST: [single_frame(bytes.fromhex("413365"))],
+               temperature.OIL_REQUEST: oil_frames(), temperature.CLUTCH_REQUEST: clutch_frames()}
+    for engine, clutch, boost in itertools.product((False, True), repeat=3):
+      with self.subTest(engine=engine, clutch=clutch, boost=boost):
+        reader = temperature.EngineTemperatureReader(engine, clutch, boost)
+        pending_frames = []
+        primary_times, pressure_times, barometer_times = [], [], []
+        for tick in range(6000):
+          now = tick / 50
+          outgoing = reader.update(now, pending_frames)
+          pending_frames = []
+          for request in outgoing:
+            if request in replies:
+              primary_times.append(now)
+              pending_frames = replies[request]
+            if request == temperature.PRESSURE_REQUEST:
+              pressure_times.append(now)
+            elif request == temperature.BAROMETER_REQUEST:
+              barometer_times.append(now)
+          if now > 4.0:
+            readings = reader.readings(now)
+            for sensor, enabled in (("oil", engine), ("coolant", engine), ("clutch1", clutch), ("clutch2", clutch), ("boost", boost)):
+              self.assertEqual(readings[sensor + "Valid"], enabled)
+        interval = temperature.BOOST_POLL_INTERVAL if boost else temperature.POLL_INTERVAL
+        self.assertTrue(all(b - a >= interval for a, b in itertools.pairwise(primary_times)))
+        if boost:
+          self.assertTrue(all(b - a <= 1.04 for a, b in itertools.pairwise(pressure_times)))
+          self.assertEqual(len(barometer_times), 2)
+        else:
+          self.assertEqual(pressure_times + barometer_times, [])
 
 
 class TestClutchTemperatures(unittest.TestCase):

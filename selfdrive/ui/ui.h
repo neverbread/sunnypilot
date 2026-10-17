@@ -66,6 +66,7 @@ typedef struct UIScene {
   bool blindspot_lane_highlight = false;
   bool engine_temperature_display = false;
   bool dct_temperature_display = false;
+  bool boost_display = false;
   uint64_t started_frame;
 } UIScene;
 

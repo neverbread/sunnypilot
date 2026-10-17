@@ -13,7 +13,7 @@ struct EngineTemperatureFrame {
 
 class EngineTemperatureRequests {
 public:
-  enum Kind { COOLANT = 0, OIL = 1, FLOW_CONTROL = 2, CLUTCH = 3, CLUTCH_FLOW_CONTROL = 4 };
+  enum Kind { COOLANT = 0, OIL = 1, FLOW_CONTROL = 2, CLUTCH = 3, CLUTCH_FLOW_CONTROL = 4, PRESSURE = 5, BAROMETER = 6 };
 
   std::optional<EngineTemperatureFrame> get(unsigned int kind, uint64_t timestamp, uint64_t now, bool enabled) {
     if (!enabled) {
@@ -28,14 +28,16 @@ public:
       flow_control_address = 0;
       return EngineTemperatureFrame{address, {0x30, 0x00, 0x0A, 0, 0, 0, 0, 0}};
     }
-    if (kind != COOLANT && kind != OIL && kind != CLUTCH) return std::nullopt;
-    // Allow scheduling jitter around the reader's one-second request interval.
-    if (request_sent && (now < last_request || now - last_request < 900000000ULL)) return std::nullopt;
+    if (kind != COOLANT && kind != OIL && kind != CLUTCH && kind != PRESSURE && kind != BAROMETER) return std::nullopt;
+    // Allow scheduling jitter around the reader's shortest half-second interval.
+    if (request_sent && (now < last_request || now - last_request < 450000000ULL)) return std::nullopt;
     last_request = now;
     request_sent = true;
     flow_control_address = kind == OIL ? 0x7E0 : (kind == CLUTCH ? 0x7E1 : 0);
     if (kind == CLUTCH) return EngineTemperatureFrame{0x7E1, {0x03, 0x22, 0x01, 0xA4, 0, 0, 0, 0}};
     if (kind == OIL) return EngineTemperatureFrame{0x7E0, {0x03, 0x22, 0xE0, 0x01, 0, 0, 0, 0}};
+    if (kind == PRESSURE) return EngineTemperatureFrame{0x7DF, {0x03, 0x01, 0x05, 0x0B, 0, 0, 0, 0}};
+    if (kind == BAROMETER) return EngineTemperatureFrame{0x7DF, {0x02, 0x01, 0x33, 0, 0, 0, 0, 0}};
     return EngineTemperatureFrame{0x7DF, {0x02, 0x01, 0x05, 0, 0, 0, 0, 0}};
   }
 

@@ -104,6 +104,13 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       false,
     },
     {
+      "BoostDisplay",
+      tr("Boost Display"),
+      tr("Show calculated boost pressure below the clutch temperatures on the driving screen for the 2018 Elantra GT Sport. Uses kPa with Use Metric System enabled, otherwise psi. Negative values indicate vacuum. Unavailable readings appear as a dash. Takes effect after restarting the car."),
+      "../assets/icons/metric.png",
+      false,
+    },
+    {
       "AlwaysOnDM",
       tr("Always-On Driver Monitoring"),
       tr("Enable driver monitoring even when sunnypilot is not engaged."),

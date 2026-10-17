@@ -1,4 +1,4 @@
-"""Display-only temperatures from the user's recorded Elantra AD ECM/TCM profile.
+"""Display-only telemetry from the user's recorded Elantra AD ECM/TCM profile.
 
 Frames are classic CAN (address, data, bus) tuples. The caller supplies monotonic
 seconds and only frames received during the current drive, after the last update.
@@ -14,17 +14,24 @@ DIAGNOSTIC_BUS = 1
 ECM_RESPONSE = 0x7E8
 TCM_RESPONSE = 0x7E9
 POLL_INTERVAL = 1.0  # One request per second total across the enabled groups.
+BOOST_POLL_INTERVAL = 0.5  # Alternate MAP with slower temperature/barometer reads.
+BAROMETER_INTERVAL = 60.0
+BAROMETER_FALLBACK_KPA = 101.325
 RESPONSE_TIMEOUT = 0.5
 STALE_AFTER = 5.0
+BOOST_STALE_AFTER = 2.0
 
 COOLANT_REQUEST = (0x7DF, bytes.fromhex("02 01 05 00 00 00 00 00"), DIAGNOSTIC_BUS)
+PRESSURE_REQUEST = (0x7DF, bytes.fromhex("03 01 05 0B 00 00 00 00"), DIAGNOSTIC_BUS)
+BAROMETER_REQUEST = (0x7DF, bytes.fromhex("02 01 33 00 00 00 00 00"), DIAGNOSTIC_BUS)
 OIL_REQUEST = (0x7E0, bytes.fromhex("03 22 E0 01 00 00 00 00"), DIAGNOSTIC_BUS)
 OIL_FLOW_CONTROL = (0x7E0, bytes.fromhex("30 00 0A 00 00 00 00 00"), DIAGNOSTIC_BUS)
 CLUTCH_REQUEST = (0x7E1, bytes.fromhex("03 22 01 A4 00 00 00 00"), DIAGNOSTIC_BUS)
 CLUTCH_FLOW_CONTROL = (0x7E1, bytes.fromhex("30 00 0A 00 00 00 00 00"), DIAGNOSTIC_BUS)
 OIL_RESPONSE_LENGTH = 51
 CLUTCH_RESPONSE_LENGTH = 49
-REQUESTS = {"coolant": COOLANT_REQUEST, "oil": OIL_REQUEST, "clutch": CLUTCH_REQUEST}
+REQUESTS = {"coolant": COOLANT_REQUEST, "oil": OIL_REQUEST, "clutch": CLUTCH_REQUEST,
+            "pressure": PRESSURE_REQUEST, "barometer": BAROMETER_REQUEST}
 
 
 def decode_coolant_temperature(payload: bytes) -> float | None:
@@ -43,6 +50,19 @@ def decode_oil_temperature(payload: bytes) -> float | None:
   return payload[37] * 0.75 - 48.0
 
 
+def decode_manifold_pressure(payload: bytes) -> float | None:
+  """MAP in kPa from the recorded combined coolant/MAP response 41 05 A 0B B."""
+  if len(payload) != 5 or payload[:2] != b"\x41\x05" or payload[3] != 0x0B:
+    return None
+  return float(payload[4])
+
+
+def decode_barometric_pressure(payload: bytes) -> float | None:
+  if len(payload) != 3 or payload[:2] != b"\x41\x33" or payload[2] == 0:
+    return None
+  return float(payload[2])
+
+
 def decode_clutch_temperatures(payload: bytes) -> tuple[float, float] | None:
   """Recorded TCM-reported temperatures: unsigned big-endian words in Celsius."""
   if len(payload) != CLUTCH_RESPONSE_LENGTH or payload[:3] != b"\x62\x01\xa4":
@@ -51,8 +71,12 @@ def decode_clutch_temperatures(payload: bytes) -> tuple[float, float] | None:
 
 
 class EngineTemperatureReader:
-  def __init__(self, engine_enabled: bool = True, clutch_enabled: bool = False):
-    self._poll_order = (("coolant", "oil") if engine_enabled else ()) + (("clutch",) if clutch_enabled else ())
+  def __init__(self, engine_enabled: bool = True, clutch_enabled: bool = False, boost_enabled: bool = False):
+    self._engine_enabled = engine_enabled
+    self._boost_enabled = boost_enabled
+    self._poll_interval = BOOST_POLL_INTERVAL if boost_enabled else POLL_INTERVAL
+    self._poll_order = (("oil",) if boost_enabled else ("coolant", "oil")) if engine_enabled else ()
+    self._poll_order += ("clutch",) if clutch_enabled else ()
     self.reset()
 
   @property
@@ -66,7 +90,28 @@ class EngineTemperatureReader:
     self._last_update: float | None = None
     self._last_request: float | None = None
     self._poll_index = 0
+    self._barometer_kpa: float | None = None
+    self._last_barometer_request: float | None = None
+    self._next_pressure = True
     self._finish_request()
+
+  def _next_request(self, now: float) -> str:
+    if self._boost_enabled:
+      # At most two primary requests per second, with MAP at least every other
+      # request. One slow slot per minute refreshes the cached barometer; it
+      # does not advance the temperature rotation or delay the next MAP read.
+      if self._next_pressure:
+        self._next_pressure = False
+        return "pressure"
+      self._next_pressure = True
+      if self._last_barometer_request is None or now - self._last_barometer_request >= BAROMETER_INTERVAL:
+        self._last_barometer_request = now
+        return "barometer"
+      if not self._poll_order:
+        return "pressure"
+    request = self._poll_order[self._poll_index]
+    self._poll_index = (self._poll_index + 1) % len(self._poll_order)
+    return request
 
   def _finish_request(self) -> None:
     self._pending: str | None = None
@@ -91,12 +136,26 @@ class EngineTemperatureReader:
         self._finish_request()
         return False
       payload = data[1:1 + length]
-      expected_service = 0x01 if self._pending == "coolant" else 0x22
+      expected_service = 0x01 if self._pending in ("coolant", "pressure", "barometer") else 0x22
       if len(payload) == 3 and payload[:2] == bytes((0x7F, expected_service)):
         # Negative responses, including "response pending", never extend timeout.
         self._finish_request()
       elif self._pending == "coolant":
         self._accept("coolant", decode_coolant_temperature(payload), now)
+      elif self._pending == "pressure":
+        manifold_kpa = decode_manifold_pressure(payload)
+        if manifold_kpa is not None:
+          if self._engine_enabled:
+            self._values["coolant"] = (float(payload[2] - 40), now)
+          # calculated.boost_gauge in the supplied profile: preserve vacuum.
+          reference_kpa = self._barometer_kpa if self._barometer_kpa is not None else BAROMETER_FALLBACK_KPA
+          self._values["boost"] = (manifold_kpa - reference_kpa, now)
+        self._finish_request()
+      elif self._pending == "barometer":
+        barometer_kpa = decode_barometric_pressure(payload)
+        if barometer_kpa is not None:
+          self._barometer_kpa = barometer_kpa
+        self._finish_request()
       elif self._payload:
         self._finish_request()
       return False
@@ -138,7 +197,7 @@ class EngineTemperatureReader:
     discarded. Receive handling precedes issuing a request so queued old frames
     cannot satisfy a request issued in this same update.
     """
-    if not enabled or not self._poll_order:
+    if not enabled or not (self._poll_order or self._boost_enabled):
       self.reset()
       return []
     if self._last_update is not None and now < self._last_update:
@@ -161,9 +220,8 @@ class EngineTemperatureReader:
       if self._receive(data, now):
         outgoing.append(CLUTCH_FLOW_CONTROL if self._pending == "clutch" else OIL_FLOW_CONTROL)
 
-    if self._pending is None and (self._last_request is None or now - self._last_request >= POLL_INTERVAL):
-      self._pending = self._poll_order[self._poll_index]
-      self._poll_index = (self._poll_index + 1) % len(self._poll_order)
+    if self._pending is None and (self._last_request is None or now - self._last_request >= self._poll_interval):
+      self._pending = self._next_request(now)
       self._last_request = now
       self._deadline = now + RESPONSE_TIMEOUT
       outgoing.append(REQUESTS[self._pending])
@@ -177,4 +235,8 @@ class EngineTemperatureReader:
       valid = 0 <= now - timestamp < STALE_AFTER
       readings[f"{sensor}Celsius"] = value if valid else 0.0
       readings[f"{sensor}Valid"] = valid
+    value, timestamp = self._values.get("boost", (0.0, float("-inf")))
+    valid = 0 <= now - timestamp < BOOST_STALE_AFTER
+    readings["boostKpa"] = value if valid else 0.0
+    readings["boostValid"] = valid
     return readings

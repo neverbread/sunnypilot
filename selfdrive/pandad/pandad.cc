@@ -120,6 +120,8 @@ void can_send_thread(std::vector<Panda *> pandas, bool fake_send, const std::ato
   static_assert(static_cast<int>(TemperatureKind::FLOW_CONTROL) == EngineTemperatureRequests::FLOW_CONTROL);
   static_assert(static_cast<int>(TemperatureKind::CLUTCH) == EngineTemperatureRequests::CLUTCH);
   static_assert(static_cast<int>(TemperatureKind::CLUTCH_FLOW_CONTROL) == EngineTemperatureRequests::CLUTCH_FLOW_CONTROL);
+  static_assert(static_cast<int>(TemperatureKind::PRESSURE) == EngineTemperatureRequests::PRESSURE);
+  static_assert(static_cast<int>(TemperatureKind::BAROMETER) == EngineTemperatureRequests::BAROMETER);
 
   // run as fast as messages come in
   while (!do_exit && check_all_connected(pandas)) {

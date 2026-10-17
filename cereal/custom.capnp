@@ -282,6 +282,8 @@ struct EngineTemperature @0xcb9fd56c7057593a {
   clutch2Celsius @6 :Float32;
   clutch1Valid @7 :Bool;
   clutch2Valid @8 :Bool;
+  boostKpa @9 :Float32;
+  boostValid @10 :Bool;
 }
 
 struct EngineTemperatureRequest @0xc2243c65e0340384 {
@@ -293,6 +295,8 @@ struct EngineTemperatureRequest @0xc2243c65e0340384 {
     flowControl @2;
     clutch @3;
     clutchFlowControl @4;
+    pressure @5;
+    barometer @6;
   }
 }
 

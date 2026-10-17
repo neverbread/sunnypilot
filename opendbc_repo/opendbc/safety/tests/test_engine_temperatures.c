@@ -13,13 +13,15 @@ static unsigned int checks = 0U;
   } \
 } while (0)
 
-static const uint32_t request_addrs[] = {0x7E0U, 0x7DFU, 0x7E0U, 0x7E1U, 0x7E1U};
+static const uint32_t request_addrs[] = {0x7E0U, 0x7DFU, 0x7E0U, 0x7E1U, 0x7E1U, 0x7DFU, 0x7DFU};
 static const uint8_t requests[][8] = {
   {0x03U, 0x22U, 0xE0U, 0x01U, 0U, 0U, 0U, 0U},
   {0x02U, 0x01U, 0x05U, 0U, 0U, 0U, 0U, 0U},
   {0x30U, 0U, 0x0AU, 0U, 0U, 0U, 0U, 0U},
   {0x03U, 0x22U, 0x01U, 0xA4U, 0U, 0U, 0U, 0U},
   {0x30U, 0U, 0x0AU, 0U, 0U, 0U, 0U, 0U},
+  {0x03U, 0x01U, 0x05U, 0x0BU, 0U, 0U, 0U, 0U},
+  {0x02U, 0x01U, 0x33U, 0U, 0U, 0U, 0U, 0U},
 };
 static const unsigned int request_count = sizeof(requests) / sizeof(requests[0]);
 _Static_assert(sizeof(requests) / sizeof(requests[0]) == sizeof(request_addrs) / sizeof(request_addrs[0]), "request count mismatch");
@@ -67,7 +69,7 @@ static void test_exact_requests(void) {
       for (unsigned int value = 0U; value < 256U; value++) {
         packet = request_packet(index);
         packet.data[byte] = value;
-        CHECK(safety_tx_hook(&packet) == (value == requests[index][byte]));
+        CHECK(safety_tx_hook(&packet) == expected_request(packet.addr, packet.data));
       }
     }
     for (unsigned int bus = 0U; bus < 8U; bus++) {
@@ -230,6 +232,6 @@ int main(void) {
   test_flags_and_routing();
   test_unchanged_controls_and_forwarding();
   test_mads_and_rx_configuration_preserved();
-  printf("PASS: %u engine/DCT temperature safety and regression checks\n", checks);
+  printf("PASS: %u engine/DCT temperature and boost safety and regression checks\n", checks);
   return 0;
 }

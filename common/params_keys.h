@@ -160,7 +160,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RainbowMode", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"ShowAdvancedControls", {PERSISTENT | BACKUP, BOOL, "0"}},
 
-    // Custom driving reminders and temperature displays
+    // Custom driving reminders and vehicle readings
     {"BlindspotLaneHighlight", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"LeadDepartAlert", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"GreenLightAlert", {PERSISTENT | BACKUP, BOOL, "1"}},
@@ -168,6 +168,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SteeringSpeedChime", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"EngineTemperatureDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"DctTemperatureDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
+    {"BoostDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
 
     // MADS params
     {"Mads", {PERSISTENT | BACKUP, BOOL, "1"}},

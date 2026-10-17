@@ -666,6 +666,10 @@ Firehose Mode allows you to maximize your training data uploads to improve openp
         <source>CLUTCH 2</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>BOOST</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>HyundaiSettings</name>
@@ -2360,6 +2364,14 @@ Warning: You are on a metered connection!</source>
     </message>
     <message>
         <source>Show the transmission controller&apos;s reported clutch 1 and clutch 2 temperatures on the driving screen for the 2018 Elantra GT Sport. These values may be modeled estimates. Uses Celsius with Use Metric System enabled, otherwise Fahrenheit. Unavailable readings appear as a dash. Takes effect after restarting the car.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Boost Display</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show calculated boost pressure below the clutch temperatures on the driving screen for the 2018 Elantra GT Sport. Uses kPa with Use Metric System enabled, otherwise psi. Negative values indicate vacuum. Unavailable readings appear as a dash. Takes effect after restarting the car.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

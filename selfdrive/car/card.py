@@ -140,7 +140,7 @@ class Car:
       self.CP.safetyConfigs = [safety_config]
 
     configure_engine_temperatures(self.CP, self.params.get_bool("EngineTemperatureDisplay"),
-                                   self.params.get_bool("DctTemperatureDisplay"))
+                                   self.params.get_bool("DctTemperatureDisplay"), self.params.get_bool("BoostDisplay"))
 
     if self.CP.secOcRequired and not is_release:
       # Copy user key if available

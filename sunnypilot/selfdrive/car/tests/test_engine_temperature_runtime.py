@@ -1,5 +1,6 @@
 """Exercise the daemon's real message construction with isolated I/O."""
 
+import itertools
 import unittest
 from types import ModuleType, SimpleNamespace as NS
 from unittest.mock import Mock, patch
@@ -27,10 +28,10 @@ class TestEngineTemperatureRuntime(unittest.TestCase):
       self.assertEqual(restored.safetyConfigs[0].safetyParam, 64 | 2048)
 
   def test_daemon_publishes_valid_messages_and_boottime_timestamps(self):
-    for engine, clutch, request_kind in ((True, False, "coolant"), (False, True, "clutch"),
-                                        (True, True, "coolant"), (False, False, None)):
-      with self.subTest(engine=engine, clutch=clutch):
-        flags = {"EngineTemperatureDisplay": engine, "DctTemperatureDisplay": clutch, "ControlsReady": True}
+    for engine, clutch, boost in itertools.product((False, True), repeat=3):
+      with self.subTest(engine=engine, clutch=clutch, boost=boost):
+        request_kind = "pressure" if boost else "coolant" if engine else "clutch" if clutch else None
+        flags = {"EngineTemperatureDisplay": engine, "DctTemperatureDisplay": clutch, "BoostDisplay": boost, "ControlsReady": True}
         cp = self.car_params()
         params = NS(get=Mock(return_value=cp.to_bytes()), get_bool=lambda key: flags.get(key, False))
         messages = []
@@ -82,7 +83,20 @@ class TestEngineTemperatureRuntime(unittest.TestCase):
             else:
               readings = event.engineTemperature
               self.assertTrue(readings.supported)
-              self.assertFalse(readings.oilValid or readings.coolantValid or readings.clutch1Valid or readings.clutch2Valid)
+              self.assertFalse(readings.oilValid or readings.coolantValid or readings.clutch1Valid or readings.clutch2Valid or readings.boostValid)
+
+  def test_boost_reading_and_request_schema_round_trip(self):
+    for kind in ("pressure", "barometer"):
+      msg = log.Event.new_message(valid=True)
+      msg.init("engineTemperatureRequest").kind = kind
+      with log.Event.from_bytes(msg.to_bytes()) as restored:
+        self.assertEqual(restored.engineTemperatureRequest.kind, kind)
+    msg = log.Event.new_message(valid=True)
+    msg.init("engineTemperature")
+    msg.engineTemperature = {"boostKpa": -58.325, "boostValid": True, "supported": True}
+    with log.Event.from_bytes(msg.to_bytes()) as restored:
+      self.assertAlmostEqual(restored.engineTemperature.boostKpa, -58.325, places=4)
+      self.assertTrue(restored.engineTemperature.boostValid)
 
 
 if __name__ == '__main__':

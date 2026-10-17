@@ -1,3 +1,4 @@
+import itertools
 import unittest
 from types import SimpleNamespace as NS
 
@@ -30,13 +31,13 @@ class TestEngineTemperatureGates(unittest.TestCase):
       self.assertFalse(supports_engine_temperatures(self.CP))
 
   def test_each_display_selects_restricted_safety_without_changing_other_flags(self):
-    for engine, clutch in ((False, False), (False, True), (True, False), (True, True)):
-      with self.subTest(engine=engine, clutch=clutch):
+    for engine, clutch, boost in itertools.product((False, True), repeat=3):
+      with self.subTest(engine=engine, clutch=clutch, boost=boost):
         self.config.safetyParam = 64
-        configure_engine_temperatures(self.CP, engine, clutch)
-        self.assertEqual(self.config.safetyParam, 64 | (2048 if engine or clutch else 0))
-        self.assertEqual(supports_engine_temperatures(self.CP), engine or clutch)
-    configure_engine_temperatures(self.CP, False, False)
+        configure_engine_temperatures(self.CP, engine, clutch, boost)
+        self.assertEqual(self.config.safetyParam, 64 | (2048 if engine or clutch or boost else 0))
+        self.assertEqual(supports_engine_temperatures(self.CP), engine or clutch or boost)
+    configure_engine_temperatures(self.CP, False, False, False)
     self.assertEqual(self.config.safetyParam, 64)
 
   def test_never_enables_diagnostics_for_unsupported_configuration(self):
@@ -46,13 +47,13 @@ class TestEngineTemperatureGates(unittest.TestCase):
         self.config.safetyParam = 64
         previous = getattr(self.CP, field)
         setattr(self.CP, field, value)
-        configure_engine_temperatures(self.CP, True, True)
+        configure_engine_temperatures(self.CP, True, True, True)
         self.assertEqual(self.config.safetyParam, 64)
         setattr(self.CP, field, previous)
     for mode in ("hyundai", "hyundaiCanfd", "elm327", "noOutput"):
       self.config.safetyModel = mode
       self.config.safetyParam = 64
-      configure_engine_temperatures(self.CP, True, True)
+      configure_engine_temperatures(self.CP, True, True, True)
       self.assertEqual(self.config.safetyParam, 64)
 
   def test_waits_for_actual_panda_mode_and_drive(self):
@@ -137,6 +138,28 @@ class TestEngineTemperatureSession(unittest.TestCase):
     session.configure(engine_enabled=False, clutch_enabled=False)
     self.assertEqual(session.update(2.0, [], True), [])
     self.assertFalse(any(value for key, value in session.reader.readings(2.0).items() if key.endswith("Valid")))
+
+  def test_boost_only_messages_and_reconfiguration(self):
+    session = EngineTemperatureSession(engine_enabled=False, boost_enabled=True)
+    self.assertEqual(session.update(1.0, [], True), ["pressure"])
+    pressure = NS(logMonoTime=1_040_000_000, valid=True,
+                  can=[NS(address=0x7E8, src=1, dat=bytes.fromhex("05 41 05 7E 0B 2B 00 00"))])
+    self.assertEqual(session.update(1.05, [pressure], True), [])
+    self.assertAlmostEqual(session.reader.readings(1.05)["boostKpa"], -58.325)
+    self.assertTrue(session.reader.readings(1.05)["boostValid"])
+    self.assertFalse(session.reader.readings(1.05)["coolantValid"])
+    self.assertEqual(session.update(1.5, [], True), ["barometer"])
+    session.configure(engine_enabled=False, clutch_enabled=False, boost_enabled=False)
+    barometer = NS(logMonoTime=1_540_000_000, valid=True,
+                   can=[NS(address=0x7E8, src=1, dat=bytes.fromhex("03 41 33 65 00 00 00 00"))])
+    self.assertEqual(session.update(1.55, [barometer], True), [])
+    self.assertFalse(session.reader.readings(1.55)["boostValid"])
+    session.configure(engine_enabled=False, clutch_enabled=False, boost_enabled=True)
+    self.assertEqual(session.update(2.0, [pressure, barometer], True), ["pressure"])
+    self.assertFalse(session.reader.readings(2.0)["boostValid"])
+    pressure.logMonoTime = 2_040_000_000
+    session.update(2.05, [pressure], True)
+    self.assertAlmostEqual(session.reader.readings(2.05)["boostKpa"], -58.325)
 
 
 if __name__ == "__main__":

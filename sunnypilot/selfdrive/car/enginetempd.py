@@ -2,6 +2,7 @@
 
 from openpilot.sunnypilot.selfdrive.car.engine_temperature import (
   COOLANT_REQUEST, OIL_REQUEST, OIL_FLOW_CONTROL, CLUTCH_REQUEST, CLUTCH_FLOW_CONTROL, ECM_RESPONSE, TCM_RESPONSE, EngineTemperatureReader,
+  PRESSURE_REQUEST, BAROMETER_REQUEST,
 )
 
 
@@ -12,6 +13,7 @@ TEMPERATURE_SAFETY_FLAG = 2048
 REQUEST_KINDS = {
   COOLANT_REQUEST: "coolant", OIL_REQUEST: "oil", OIL_FLOW_CONTROL: "flowControl",
   CLUTCH_REQUEST: "clutch", CLUTCH_FLOW_CONTROL: "clutchFlowControl",
+  PRESSURE_REQUEST: "pressure", BAROMETER_REQUEST: "barometer",
 }
 OBD_PANDA_TYPES = {"blackPanda", "uno", "dos", "redPanda", "redPandaV2", "tres"}
 
@@ -22,11 +24,11 @@ def supported_vehicle_configuration(CP) -> bool:
           CP.safetyConfigs[0].safetyModel == "hyundaiLegacy")
 
 
-def configure_engine_temperatures(CP, engine_enabled: bool, clutch_enabled: bool) -> None:
+def configure_engine_temperatures(CP, engine_enabled: bool, clutch_enabled: bool, boost_enabled: bool = False) -> None:
   """Select restricted OBD reads before card saves the final CarParams."""
   if supported_vehicle_configuration(CP):
     CP.safetyConfigs[0].safetyParam &= ~TEMPERATURE_SAFETY_FLAG
-    if engine_enabled or clutch_enabled:
+    if engine_enabled or clutch_enabled or boost_enabled:
       CP.safetyConfigs[0].safetyParam |= TEMPERATURE_SAFETY_FLAG
 
 
@@ -49,17 +51,17 @@ def state_messages_fresh(now: float, receive_times) -> bool:
 
 
 class EngineTemperatureSession:
-  def __init__(self, engine_enabled: bool = True, clutch_enabled: bool = False):
-    self._configuration: tuple[bool, bool] | None = None
+  def __init__(self, engine_enabled: bool = True, clutch_enabled: bool = False, boost_enabled: bool = False):
+    self._configuration: tuple[bool, bool, bool] | None = None
     self.reader: EngineTemperatureReader
-    self.configure(engine_enabled, clutch_enabled)
+    self.configure(engine_enabled, clutch_enabled, boost_enabled)
 
-  def configure(self, engine_enabled: bool, clutch_enabled: bool) -> None:
-    configuration = (engine_enabled, clutch_enabled)
+  def configure(self, engine_enabled: bool, clutch_enabled: bool, boost_enabled: bool = False) -> None:
+    configuration = (engine_enabled, clutch_enabled, boost_enabled)
     if configuration != self._configuration:
       # A changed selection starts a new transaction; queued old replies cannot
       # repopulate readings that the user just disabled.
-      self.reader = EngineTemperatureReader(engine_enabled=engine_enabled, clutch_enabled=clutch_enabled)
+      self.reader = EngineTemperatureReader(engine_enabled=engine_enabled, clutch_enabled=clutch_enabled, boost_enabled=boost_enabled)
       self._configuration = configuration
 
   def update(self, now: float, can_events, ready: bool) -> list[str]:
@@ -103,8 +105,9 @@ def main():
     fresh = sm.all_checks() and state_messages_fresh(time.monotonic(), sm.recv_time)
     engine_enabled = params.get_bool("EngineTemperatureDisplay")
     clutch_enabled = params.get_bool("DctTemperatureDisplay")
-    session.configure(engine_enabled, clutch_enabled)
-    ready = diagnostics_ready(supported, params.get_bool("ControlsReady") and (engine_enabled or clutch_enabled),
+    boost_enabled = params.get_bool("BoostDisplay")
+    session.configure(engine_enabled, clutch_enabled, boost_enabled)
+    ready = diagnostics_ready(supported, params.get_bool("ControlsReady") and (engine_enabled or clutch_enabled or boost_enabled),
                               sm["deviceState"].started, sm["pandaStates"], fresh)
     for kind in session.update(now, events, ready):
       request = messaging.new_message("engineTemperatureRequest", valid=True)

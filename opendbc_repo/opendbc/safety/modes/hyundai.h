@@ -234,10 +234,12 @@ static bool hyundai_tx_hook(const CANPacket_t *msg) {
     const bool oil_request = (msg->addr == 0x7E0U) && (request == 0x01E02203U);
     const bool dct_request = (msg->addr == 0x7E1U) && (request == 0xA4012203U);
     const bool coolant_request = (msg->addr == 0x7DFU) && (request == 0x00050102U);
+    const bool pressure_request = (msg->addr == 0x7DFU) && (request == 0x0B050103U);
+    const bool barometer_request = (msg->addr == 0x7DFU) && (request == 0x00330102U);
     const bool flow_control = ((msg->addr == 0x7E0U) || (msg->addr == 0x7E1U)) && (request == 0x000A0030U);
     tx = hyundai_legacy && hyundai_engine_temperatures && (msg->bus == 1U) && (GET_LEN(msg) == 8) &&
          (msg->extended == 0U) && (msg->fd == 0U) && (GET_BYTES(msg, 4, 4) == 0U) &&
-         (oil_request || dct_request || coolant_request || flow_control);
+         (oil_request || dct_request || coolant_request || pressure_request || barometer_request || flow_control);
   }
 
   // FCA11: Block any potential actuation
@@ -489,7 +491,7 @@ static safety_config hyundai_init(uint16_t param) {
 static safety_config hyundai_legacy_init(uint16_t param) {
   static const CanMsg HYUNDAI_TEMPERATURE_TX_MSGS[] = {
     HYUNDAI_COMMON_TX_MSGS(0)
-    {0x7DF, 1, 8, .check_relay = false},  // Coolant read request
+    {0x7DF, 1, 8, .check_relay = false},  // Coolant/MAP and barometric pressure reads
     {0x7E0, 1, 8, .check_relay = false},  // ECM oil read and flow control
     {0x7E1, 1, 8, .check_relay = false},  // TCM clutch read and flow control
   };
