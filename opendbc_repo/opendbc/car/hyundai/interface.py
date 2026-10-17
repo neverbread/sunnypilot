@@ -11,6 +11,7 @@ from opendbc.car.hyundai.carstate import CarState
 from opendbc.car.hyundai.radar_interface import RadarInterface
 
 from opendbc.sunnypilot.car.hyundai.escc import ESCC_MSG
+from opendbc.sunnypilot.car.hyundai.elantra_longitudinal import supports_elantra_longitudinal, initialize_elantra_longitudinal
 from opendbc.sunnypilot.car.hyundai.longitudinal.helpers import get_longitudinal_tune
 from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP, HyundaiSafetyFlagsSP
 
@@ -29,6 +30,7 @@ class CarInterface(CarInterfaceBase):
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
     ret.brand = "hyundai"
+    elantra_long_available = not is_release and not docs and supports_elantra_longitudinal(candidate, fingerprint, car_fw)
 
     # "LKA steering" if LKAS or LKAS_ALT messages are seen coming from the camera.
     # Generally means our LKAS message is forwarded to another ECU (commonly ADAS ECU)
@@ -87,7 +89,7 @@ class CarInterface(CarInterfaceBase):
 
     else:
       # Shared configuration for non CAN-FD cars
-      ret.alphaLongitudinalAvailable = candidate not in UNSUPPORTED_LONGITUDINAL_CAR
+      ret.alphaLongitudinalAvailable = candidate not in UNSUPPORTED_LONGITUDINAL_CAR or elantra_long_available
       ret.enableBsm = 0x58b in fingerprint[0]
 
       # Send LFA message on cars with HDA
@@ -98,7 +100,7 @@ class CarInterface(CarInterfaceBase):
       if 0x38d in fingerprint[0] or 0x38d in fingerprint[2]:
         ret.flags |= HyundaiFlags.USE_FCA.value
 
-      if ret.flags & HyundaiFlags.LEGACY:
+      if ret.flags & HyundaiFlags.LEGACY and not (alpha_long and elantra_long_available):
         # these cars require a special panda safety mode due to missing counters and checksums in the messages
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.hyundaiLegacy)]
       else:
@@ -206,6 +208,11 @@ class CarInterface(CarInterfaceBase):
 
   @staticmethod
   def init(CP, CP_SP, can_recv, can_send, communication_control=None):
+    if (communication_control is None and CP.openpilotLongitudinalControl and
+        CP.carFingerprint == CAR.HYUNDAI_ELANTRA_GT_I30 and not CP_SP.flags & HyundaiFlagsSP.ENHANCED_SCC):
+      initialize_elantra_longitudinal(can_recv, can_send)
+      return
+
     # 0x80 silences response
     if communication_control is None:
       communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, 0x80 | uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX, uds.MESSAGE_TYPE.NORMAL])

@@ -10,6 +10,8 @@ from openpilot.sunnypilot.selfdrive.car.engine_temperature import (
 # the vehicle parser or native control modules into this display-only process.
 SUPPORTED_CAR = "HYUNDAI_ELANTRA_GT_I30"
 TEMPERATURE_SAFETY_FLAG = 2048
+LONGITUDINAL_SAFETY_FLAG = 4
+LONGITUDINAL_TEMPERATURE_FLAGS = LONGITUDINAL_SAFETY_FLAG | 64 | 512 | TEMPERATURE_SAFETY_FLAG
 REQUEST_KINDS = {
   COOLANT_REQUEST: "coolant", OIL_REQUEST: "oil", OIL_FLOW_CONTROL: "flowControl",
   CLUTCH_REQUEST: "clutch", CLUTCH_FLOW_CONTROL: "clutchFlowControl",
@@ -18,10 +20,19 @@ REQUEST_KINDS = {
 OBD_PANDA_TYPES = {"blackPanda", "uno", "dos", "redPanda", "redPandaV2", "tres"}
 
 
+def supported_safety_configuration(safety_model, safety_param: int) -> bool:
+  return (safety_model == "hyundaiLegacy" or
+          (safety_model == "hyundai" and bool(safety_param & LONGITUDINAL_SAFETY_FLAG) and
+           not safety_param & ~LONGITUDINAL_TEMPERATURE_FLAGS))
+
+
 def supported_vehicle_configuration(CP) -> bool:
-  return (CP.carFingerprint == SUPPORTED_CAR and CP.brand == "hyundai" and not CP.notCar and
-          not CP.passive and not CP.dashcamOnly and len(CP.safetyConfigs) == 1 and
-          CP.safetyConfigs[0].safetyModel == "hyundaiLegacy")
+  if not (CP.carFingerprint == SUPPORTED_CAR and CP.brand == "hyundai" and not CP.notCar and
+          not CP.passive and not CP.dashcamOnly and len(CP.safetyConfigs) == 1):
+    return False
+  config = CP.safetyConfigs[0]
+  return (supported_safety_configuration(config.safetyModel, config.safetyParam) and
+          (config.safetyModel == "hyundaiLegacy" or CP.openpilotLongitudinalControl))
 
 
 def configure_engine_temperatures(CP, engine_enabled: bool, clutch_enabled: bool, boost_enabled: bool = False) -> None:
@@ -40,7 +51,7 @@ def diagnostics_ready(supported: bool, controls_ready: bool, started: bool, pand
   if not (supported and controls_ready and started and fresh and len(panda_states)):
     return False
   panda = panda_states[0]  # Only the internal panda connects to OBD.
-  return (str(panda.pandaType) in OBD_PANDA_TYPES and panda.safetyModel == "hyundaiLegacy" and
+  return (str(panda.pandaType) in OBD_PANDA_TYPES and supported_safety_configuration(panda.safetyModel, panda.safetyParam) and
           bool(panda.safetyParam & TEMPERATURE_SAFETY_FLAG) and (panda.ignitionLine or panda.ignitionCan))
 
 

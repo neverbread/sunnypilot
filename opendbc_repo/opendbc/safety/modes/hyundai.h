@@ -38,6 +38,11 @@ const LongitudinalLimits HYUNDAI_LONG_LIMITS = {
   {0x389, 0,       8, .check_relay = true},   /* SCC14 Bus 0       */ \
   {0x4A2, 0,       2, .check_relay = false},  /* FRT_RADAR11 Bus 0 */ \
 
+#define HYUNDAI_TEMPERATURE_TX_MSGS \
+  {0x7DF, 1, 8, .check_relay = false},  /* Coolant/MAP and barometric pressure reads */ \
+  {0x7E0, 1, 8, .check_relay = false},  /* ECM oil read and flow control */ \
+  {0x7E1, 1, 8, .check_relay = false},  /* TCM clutch read and flow control */ \
+
 #define HYUNDAI_COMMON_RX_CHECKS(legacy)                                                                                                                                               \
   {.msg = {{0x260, 0, 8, 100U, .max_counter = 3U, .ignore_quality_flag = true},                                                                                           \
            {0x371, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }}},                                                    \
@@ -237,7 +242,7 @@ static bool hyundai_tx_hook(const CANPacket_t *msg) {
     const bool pressure_request = (msg->addr == 0x7DFU) && (request == 0x0B050103U);
     const bool barometer_request = (msg->addr == 0x7DFU) && (request == 0x00330102U);
     const bool flow_control = ((msg->addr == 0x7E0U) || (msg->addr == 0x7E1U)) && (request == 0x000A0030U);
-    tx = hyundai_legacy && hyundai_engine_temperatures && (msg->bus == 1U) && (GET_LEN(msg) == 8) &&
+    tx = hyundai_engine_temperatures && (msg->bus == 1U) && (GET_LEN(msg) == 8) &&
          (msg->extended == 0U) && (msg->fd == 0U) && (GET_BYTES(msg, 4, 4) == 0U) &&
          (oil_request || dct_request || coolant_request || pressure_request || barometer_request || flow_control);
   }
@@ -322,6 +327,14 @@ static safety_config hyundai_init(uint16_t param) {
     {0x7D0, 0, 8, .check_relay = false}, // radar UDS TX addr Bus 0 (for radar disable)
   };
 
+  static const CanMsg HYUNDAI_LONG_TEMPERATURE_TX_MSGS[] = {
+    HYUNDAI_LONG_COMMON_TX_MSGS(0)
+    {0x38D, 0, 8, .check_relay = false}, // FCA11 Bus 0
+    {0x483, 0, 8, .check_relay = false}, // FCA12 Bus 0
+    {0x7D0, 0, 8, .check_relay = false}, // radar tester present
+    HYUNDAI_TEMPERATURE_TX_MSGS
+  };
+
   static const CanMsg HYUNDAI_CAMERA_SCC_TX_MSGS[] = {
     HYUNDAI_COMMON_TX_MSGS(2)
   };
@@ -336,6 +349,12 @@ static safety_config hyundai_init(uint16_t param) {
 
   hyundai_common_init(param);
   hyundai_legacy = false;
+  // The custom ICE radar-SCC port uses the normal longitudinal safety checks.
+  // Only LONG, steering-limit flags, and the telemetry opt-in are supported.
+  const uint16_t temperature_long_flags = 4U | 64U | 512U | HYUNDAI_PARAM_ENGINE_TEMPERATURES;
+  hyundai_engine_temperatures = hyundai_longitudinal && !hyundai_escc && !hyundai_non_scc &&
+                                ((param & ~temperature_long_flags) == 0U) &&
+                                GET_FLAG(param, HYUNDAI_PARAM_ENGINE_TEMPERATURES);
 
   safety_config ret;
   if (hyundai_longitudinal) {
@@ -377,6 +396,8 @@ static safety_config hyundai_init(uint16_t param) {
       SET_TX_MSGS(HYUNDAI_LONG_ESCC_TX_MSGS, ret);
     } else if (hyundai_camera_scc) {
       SET_TX_MSGS(HYUNDAI_CAMERA_SCC_LONG_TX_MSGS, ret);
+    } else if (hyundai_engine_temperatures) {
+      SET_TX_MSGS(HYUNDAI_LONG_TEMPERATURE_TX_MSGS, ret);
     } else {
       SET_TX_MSGS(HYUNDAI_LONG_TX_MSGS, ret);
     }
@@ -489,11 +510,9 @@ static safety_config hyundai_init(uint16_t param) {
 }
 
 static safety_config hyundai_legacy_init(uint16_t param) {
-  static const CanMsg HYUNDAI_TEMPERATURE_TX_MSGS[] = {
+  static const CanMsg HYUNDAI_LEGACY_TEMPERATURE_TX_MSGS[] = {
     HYUNDAI_COMMON_TX_MSGS(0)
-    {0x7DF, 1, 8, .check_relay = false},  // Coolant/MAP and barometric pressure reads
-    {0x7E0, 1, 8, .check_relay = false},  // ECM oil read and flow control
-    {0x7E1, 1, 8, .check_relay = false},  // TCM clutch read and flow control
+    HYUNDAI_TEMPERATURE_TX_MSGS
   };
 
   // older hyundai models have less checks due to missing counters and checksums
@@ -509,7 +528,7 @@ static safety_config hyundai_legacy_init(uint16_t param) {
   hyundai_longitudinal = false;
   hyundai_camera_scc = false;
   if (hyundai_engine_temperatures) {
-    return BUILD_SAFETY_CFG(hyundai_legacy_rx_checks, HYUNDAI_TEMPERATURE_TX_MSGS);
+    return BUILD_SAFETY_CFG(hyundai_legacy_rx_checks, HYUNDAI_LEGACY_TEMPERATURE_TX_MSGS);
   }
   return BUILD_SAFETY_CFG(hyundai_legacy_rx_checks, HYUNDAI_TX_MSGS);
 }

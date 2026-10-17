@@ -94,7 +94,7 @@ safety_config current_safety_config;
 
 bool safety_uses_obd_can2(void) {
   return ((current_safety_mode == SAFETY_ELM327) && (current_safety_param == 0U)) ||
-         ((current_safety_mode == SAFETY_HYUNDAI_LEGACY) && hyundai_engine_temperatures);
+         (((current_safety_mode == SAFETY_HYUNDAI_LEGACY) || (current_safety_mode == SAFETY_HYUNDAI)) && hyundai_engine_temperatures);
 }
 
 static void generic_rx_checks(void);

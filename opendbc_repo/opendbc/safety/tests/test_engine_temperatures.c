@@ -56,8 +56,8 @@ static void configure(uint16_t mode, uint16_t param) {
   set_controls_requested_lat(false);
 }
 
-static void test_exact_requests(void) {
-  configure(SAFETY_HYUNDAI_LEGACY, HYUNDAI_PARAM_ENGINE_TEMPERATURES);
+static void test_exact_requests(uint16_t mode, uint16_t param) {
+  configure(mode, param);
   for (unsigned int index = 0U; index < request_count; index++) {
     CANPacket_t packet = request_packet(index);
     for (unsigned int controls = 0U; controls < 2U; controls++) {
@@ -106,13 +106,16 @@ static void test_exact_requests(void) {
 
 static void test_flags_and_routing(void) {
   const uint16_t modes[] = {SAFETY_HYUNDAI_LEGACY, SAFETY_HYUNDAI, SAFETY_HYUNDAI_CANFD, SAFETY_SILENT, SAFETY_NOOUTPUT};
-  const uint16_t params[] = {0U, 1U, 1024U, 2048U, 0xFFFFU};
+  const uint16_t params[] = {0U, 1U, 4U, 1024U, 2048U, 2052U, 2053U, 2054U, 2060U, 2068U,
+                             2084U, 2116U, 2180U, 2308U, 2564U, 3076U, 0xFFFFU};
   for (unsigned int mode = 0U; mode < sizeof(modes) / sizeof(modes[0]); mode++) {
     for (unsigned int param = 0U; param < sizeof(params) / sizeof(params[0]); param++) {
       // Start enabled each time to catch stale Hyundai flag state after transitions.
       configure(SAFETY_HYUNDAI_LEGACY, HYUNDAI_PARAM_ENGINE_TEMPERATURES);
       configure(modes[mode], params[param]);
-      bool enabled = (modes[mode] == SAFETY_HYUNDAI_LEGACY) && ((params[param] & 2048U) != 0U);
+      bool enabled = ((modes[mode] == SAFETY_HYUNDAI_LEGACY) && ((params[param] & 2048U) != 0U)) ||
+                     ((modes[mode] == SAFETY_HYUNDAI) &&
+                      ((params[param] == 2052U) || (params[param] == 2116U) || (params[param] == 2564U)));
       CHECK(safety_uses_obd_can2() == enabled);
       for (unsigned int index = 0U; index < request_count; index++) {
         CANPacket_t packet = request_packet(index);
@@ -124,8 +127,20 @@ static void test_flags_and_routing(void) {
     for (unsigned int param = 0U; param < sizeof(params) / sizeof(params[0]); param++) {
       if (set_safety_hooks(mode, params[param]) != 0) continue;
       const bool expected = ((current_safety_mode == SAFETY_ELM327) && (params[param] == 0U)) ||
-                            ((current_safety_mode == SAFETY_HYUNDAI_LEGACY) && ((params[param] & 2048U) != 0U));
+                            ((current_safety_mode == SAFETY_HYUNDAI_LEGACY) && ((params[param] & 2048U) != 0U)) ||
+                            ((current_safety_mode == SAFETY_HYUNDAI) &&
+                             ((params[param] == 2052U) || (params[param] == 2116U) || (params[param] == 2564U)));
       CHECK(safety_uses_obd_can2() == expected);
+    }
+  }
+  for (int param_sp = 0; param_sp < 16; param_sp++) {
+    set_current_safety_param_sp(param_sp);
+    configure(SAFETY_HYUNDAI, 4U | HYUNDAI_PARAM_ENGINE_TEMPERATURES);
+    const bool expected = (param_sp & (HYUNDAI_PARAM_SP_ESCC | HYUNDAI_PARAM_SP_NON_SCC)) == 0;
+    CHECK(safety_uses_obd_can2() == expected);
+    for (unsigned int index = 0U; index < request_count; index++) {
+      CANPacket_t packet = request_packet(index);
+      CHECK(safety_tx_hook(&packet) == expected);
     }
   }
   // Model set_safety_mode's failure fallback, which must restore normal routing.
@@ -146,20 +161,23 @@ static CANPacket_t steer_packet(int torque) {
   return packet;
 }
 
-static void test_unchanged_controls_and_forwarding(void) {
+static void test_unchanged_controls_and_forwarding(uint16_t mode, uint16_t base_param) {
   for (unsigned int flag = 0U; flag <= 2048U; flag += 2048U) {
-    configure(SAFETY_HYUNDAI_LEGACY, flag);
+    configure(mode, base_param | flag);
     for (int bus = 0; bus < 3; bus++) {
       for (int addr = 0; addr < 0x800; addr++) {
         int expected = bus == 0 ? 2 : -1;
         if ((bus == 2) && (addr != 0x340) && (addr != 0x485)) {
           expected = 0;
+          if ((mode == SAFETY_HYUNDAI) && ((addr == 0x420) || (addr == 0x421) || (addr == 0x50A) || (addr == 0x389))) {
+            expected = -1;
+          }
         }
         CHECK(safety_fwd_hook(bus, addr) == expected);
       }
     }
     for (int torque = -400; torque <= 400; torque++) {
-      configure(SAFETY_HYUNDAI_LEGACY, flag);
+      configure(mode, base_param | flag);
       CANPacket_t packet = steer_packet(torque);
       set_controls_allowed(false);
       CHECK(safety_tx_hook(&packet) == (torque == 0));
@@ -170,12 +188,12 @@ static void test_unchanged_controls_and_forwarding(void) {
       CHECK(safety_tx_hook(&packet) == ((torque >= -384) && (torque <= 384)));
     }
     for (int torque = -8; torque <= 8; torque++) {
-      configure(SAFETY_HYUNDAI_LEGACY, flag);
+      configure(mode, base_param | flag);
       CANPacket_t packet = steer_packet(torque);
       set_controls_allowed(true);
       CHECK(safety_tx_hook(&packet) == ((torque >= -3) && (torque <= 3)));
     }
-    configure(SAFETY_HYUNDAI_LEGACY, flag);
+    configure(mode, base_param | flag);
     CANPacket_t response = {0};
     response.addr = 0x7E8U;
     response.bus = 1U;
@@ -195,18 +213,18 @@ static void test_unchanged_controls_and_forwarding(void) {
   }
 }
 
-static void test_mads_and_rx_configuration_preserved(void) {
-  configure(SAFETY_HYUNDAI_LEGACY, 0U);
+static void test_mads_and_rx_configuration_preserved(uint16_t mode, uint16_t base_param) {
+  configure(mode, base_param);
   const RxCheck *original_rx_checks = current_safety_config.rx_checks;
   const int original_rx_count = current_safety_config.rx_checks_len;
-  configure(SAFETY_HYUNDAI_LEGACY, HYUNDAI_PARAM_ENGINE_TEMPERATURES);
+  configure(mode, base_param | HYUNDAI_PARAM_ENGINE_TEMPERATURES);
   CHECK(current_safety_config.rx_checks == original_rx_checks);
   CHECK(current_safety_config.rx_checks_len == original_rx_count);
 
   for (unsigned int enabled = 0U; enabled < 2U; enabled++) {
     for (unsigned int lateral = 0U; lateral < 2U; lateral++) {
       for (unsigned int controls = 0U; controls < 2U; controls++) {
-        configure(SAFETY_HYUNDAI_LEGACY, HYUNDAI_PARAM_ENGINE_TEMPERATURES);
+        configure(mode, base_param | HYUNDAI_PARAM_ENGINE_TEMPERATURES);
         set_mads_params(enabled, false, false);
         set_controls_allowed_lat(lateral);
         set_controls_requested_lat(lateral);
@@ -228,10 +246,13 @@ static void test_mads_and_rx_configuration_preserved(void) {
 }
 
 int main(void) {
-  test_exact_requests();
+  test_exact_requests(SAFETY_HYUNDAI_LEGACY, HYUNDAI_PARAM_ENGINE_TEMPERATURES);
+  test_exact_requests(SAFETY_HYUNDAI, 4U | HYUNDAI_PARAM_ENGINE_TEMPERATURES);
   test_flags_and_routing();
-  test_unchanged_controls_and_forwarding();
-  test_mads_and_rx_configuration_preserved();
+  test_unchanged_controls_and_forwarding(SAFETY_HYUNDAI_LEGACY, 0U);
+  test_unchanged_controls_and_forwarding(SAFETY_HYUNDAI, 4U);
+  test_mads_and_rx_configuration_preserved(SAFETY_HYUNDAI_LEGACY, 0U);
+  test_mads_and_rx_configuration_preserved(SAFETY_HYUNDAI, 4U);
   printf("PASS: %u engine/DCT temperature and boost safety and regression checks\n", checks);
   return 0;
 }

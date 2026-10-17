@@ -92,7 +92,7 @@ void hyundai_common_init(uint16_t param) {
   hyundai_alt_limits = GET_FLAG(param, HYUNDAI_PARAM_ALT_LIMITS);
   hyundai_fcev_gas_signal = GET_FLAG(param, HYUNDAI_PARAM_FCEV_GAS);
   hyundai_alt_limits_2 = GET_FLAG(param, HYUNDAI_PARAM_ALT_LIMITS_2);
-  // Only legacy Hyundai safety may opt into fixed engine and DCT read requests.
+  // Each supported Hyundai safety mode must explicitly opt into fixed OBD reads.
   hyundai_engine_temperatures = false;
 
   hyundai_escc = GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_ESCC);

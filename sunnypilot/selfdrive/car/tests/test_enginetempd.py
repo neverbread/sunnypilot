@@ -11,7 +11,7 @@ class TestEngineTemperatureGates(unittest.TestCase):
   def setUp(self):
     self.config = NS(safetyModel="hyundaiLegacy", safetyParam=2048)
     self.CP = NS(carFingerprint=SUPPORTED_CAR, brand="hyundai", notCar=False, passive=False, dashcamOnly=False,
-                 safetyConfigs=[self.config])
+                 safetyConfigs=[self.config], openpilotLongitudinalControl=False)
     self.panda = NS(pandaType="dos", safetyModel="hyundaiLegacy", safetyParam=2048, ignitionLine=True, ignitionCan=False)
 
   def test_vehicle_and_flag(self):
@@ -39,6 +39,33 @@ class TestEngineTemperatureGates(unittest.TestCase):
         self.assertEqual(supports_engine_temperatures(self.CP), engine or clutch or boost)
     configure_engine_temperatures(self.CP, False, False, False)
     self.assertEqual(self.config.safetyParam, 64)
+
+  def test_longitudinal_telemetry_requires_target_car_and_longitudinal_safety(self):
+    self.config.safetyModel = "hyundai"
+    self.config.safetyParam = 4 | 2048
+    self.assertFalse(supports_engine_temperatures(self.CP))
+    self.CP.openpilotLongitudinalControl = True
+    self.assertTrue(supports_engine_temperatures(self.CP))
+    for flag in (1, 2, 8, 16, 32, 128, 256, 1024, 4096):
+      with self.subTest(flag=flag):
+        self.config.safetyParam = 4 | flag
+        configure_engine_temperatures(self.CP, True, True, True)
+        self.assertEqual(self.config.safetyParam, 4 | flag)
+        self.config.safetyParam |= 2048
+        self.assertFalse(supports_engine_temperatures(self.CP))
+    self.config.safetyParam = 4 | 2048
+    self.CP.carFingerprint = "another Hyundai"
+    self.assertFalse(supports_engine_temperatures(self.CP))
+
+  def test_longitudinal_display_toggles_preserve_safety_flags(self):
+    self.config.safetyModel = "hyundai"
+    self.CP.openpilotLongitudinalControl = True
+    for engine, clutch, boost in itertools.product((False, True), repeat=3):
+      with self.subTest(engine=engine, clutch=clutch, boost=boost):
+        self.config.safetyParam = 4 | 64
+        configure_engine_temperatures(self.CP, engine, clutch, boost)
+        self.assertEqual(self.config.safetyParam, 4 | 64 | (2048 if engine or clutch or boost else 0))
+        self.assertEqual(supports_engine_temperatures(self.CP), engine or clutch or boost)
 
   def test_never_enables_diagnostics_for_unsupported_configuration(self):
     for field, value in (("carFingerprint", "other Hyundai"), ("brand", "toyota"), ("notCar", True), ("passive", True),
@@ -75,6 +102,16 @@ class TestEngineTemperatureGates(unittest.TestCase):
     for timestamp in (0.0, 98.0, 100.1):
       self.assertFalse(state_messages_fresh(100.0, {"pandaStates": timestamp, "deviceState": 99.5}))
       self.assertFalse(state_messages_fresh(100.0, {"pandaStates": 99.9, "deviceState": timestamp}))
+
+  def test_longitudinal_panda_requires_both_flags_and_compatible_mode(self):
+    self.panda.safetyModel = "hyundai"
+    for flags, expected in ((0, False), (4, False), (2048, False), (2052, True), (2116, True),
+                            (2053, False), (2054, False), (2060, False), (2308, False)):
+      self.panda.safetyParam = flags
+      self.assertEqual(diagnostics_ready(True, True, True, [self.panda], True), expected)
+    self.panda.safetyModel = "hyundaiCanfd"
+    self.panda.safetyParam = 2052
+    self.assertFalse(diagnostics_ready(True, True, True, [self.panda], True))
 
 
 class TestEngineTemperatureSession(unittest.TestCase):

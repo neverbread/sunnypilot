@@ -312,6 +312,8 @@ class TestHyundaiLegacyEngineTemperaturesSafety(TestHyundaiLegacySafety):
     (0x7E0, bytes.fromhex("30 00 0A 00 00 00 00 00")),
     (0x7E1, bytes.fromhex("03 22 01 A4 00 00 00 00")),
     (0x7E1, bytes.fromhex("30 00 0A 00 00 00 00 00")),
+    (0x7DF, bytes.fromhex("03 01 05 0B 00 00 00 00")),
+    (0x7DF, bytes.fromhex("02 01 33 00 00 00 00 00")),
   )
 
   def setUp(self):
@@ -330,7 +332,7 @@ class TestHyundaiLegacyEngineTemperaturesSafety(TestHyundaiLegacySafety):
         self.assertEqual(self.safety.get_controls_allowed(), controls_allowed)
 
   def test_temperature_query_payloads_exact(self):
-    # Mutate every byte, including all ISO-TP fields and padding. Only the five
+    # Mutate every byte, including all ISO-TP fields and padding. Only the seven
     # complete messages are permitted, not arbitrary reads or diagnostic writes.
     for addr, dat in self.TEMPERATURE_MSGS:
       for index in range(8):
@@ -339,7 +341,7 @@ class TestHyundaiLegacyEngineTemperaturesSafety(TestHyundaiLegacySafety):
             continue
           changed = bytearray(dat)
           changed[index] = value
-          self.assertEqual(self._tx(libsafety_py.make_CANPacket(addr, 1, changed)), 0,
+          self.assertEqual(self._tx(libsafety_py.make_CANPacket(addr, 1, changed)), int((addr, bytes(changed)) in self.TEMPERATURE_MSGS),
                            (hex(addr), index, changed.hex()))
 
   def test_temperature_query_bus_and_length(self):
@@ -360,14 +362,16 @@ class TestHyundaiLegacyEngineTemperaturesSafety(TestHyundaiLegacySafety):
       for addr in list(range(0x700, 0x800)) + [0x18DB33F1, 0x18DA10F1]:
         self.assertEqual(self._tx(libsafety_py.make_CANPacket(addr, 1, dat)), int((addr, dat) in self.TEMPERATURE_MSGS), hex(addr))
 
-  def test_temperature_queries_only_with_legacy_flag(self):
+  def test_temperature_queries_only_with_supported_safety_flags(self):
     for mode in (CarParams.SafetyModel.hyundaiLegacy, CarParams.SafetyModel.hyundai, CarParams.SafetyModel.hyundaiCanfd,
                  CarParams.SafetyModel.silent, CarParams.SafetyModel.noOutput):
-      for flags in (0, HyundaiSafetyFlags.ENGINE_TEMPERATURES):
+      for flags in (0, HyundaiSafetyFlags.LONG, HyundaiSafetyFlags.ENGINE_TEMPERATURES,
+                    HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.ENGINE_TEMPERATURES):
         self.assertEqual(self.safety.set_safety_hooks(mode, flags), 0)
         self.safety.init_tests()
         for addr, dat in self.TEMPERATURE_MSGS:
-          expected = mode == CarParams.SafetyModel.hyundaiLegacy and flags == HyundaiSafetyFlags.ENGINE_TEMPERATURES
+          expected = ((mode == CarParams.SafetyModel.hyundaiLegacy and bool(flags & HyundaiSafetyFlags.ENGINE_TEMPERATURES)) or
+                      (mode == CarParams.SafetyModel.hyundai and flags == (HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.ENGINE_TEMPERATURES)))
           self.assertEqual(self._tx(libsafety_py.make_CANPacket(addr, 1, dat)), int(expected), (mode, flags))
 
   def test_temperature_queries_blocked_on_relay_fault(self):
@@ -395,11 +399,13 @@ class TestHyundaiLegacyEngineTemperaturesSafety(TestHyundaiLegacySafety):
     # ELM327's existing routing behavior remains unchanged.
     modes = CarParams.SafetyModel.schema.enumerants.values()
     for mode in modes:
-      for flags in (0, 1, HyundaiSafetyFlags.ENGINE_TEMPERATURES, 0xFFFF):
+      for flags in (0, 1, HyundaiSafetyFlags.ENGINE_TEMPERATURES,
+                    HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.ENGINE_TEMPERATURES, 0xFFFF):
         if self.safety.set_safety_hooks(mode, flags) != 0:
           continue
         expected = (mode == CarParams.SafetyModel.elm327 and flags == 0) or \
-                   (mode == CarParams.SafetyModel.hyundaiLegacy and bool(flags & HyundaiSafetyFlags.ENGINE_TEMPERATURES))
+                   (mode == CarParams.SafetyModel.hyundaiLegacy and bool(flags & HyundaiSafetyFlags.ENGINE_TEMPERATURES)) or \
+                   (mode == CarParams.SafetyModel.hyundai and flags == (HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.ENGINE_TEMPERATURES))
         self.assertEqual(self.safety.safety_uses_obd_can2(), expected, (mode, flags))
     self.safety.set_safety_hooks(CarParams.SafetyModel.silent, 0)
     self.assertFalse(self.safety.safety_uses_obd_can2())
@@ -486,6 +492,34 @@ class TestHyundaiLongitudinalSafety(HyundaiLongitudinalBase, TestHyundaiSafety):
     self.assertTrue(self._tx(self._accel_msg(0)))
     self.assertFalse(self._tx(self._accel_msg(0, aeb_req=True)))
     self.assertFalse(self._tx(self._accel_msg(0, aeb_decel=1.0)))
+
+
+class TestHyundaiLongitudinalSafetyEngineTemperatures(TestHyundaiLongitudinalSafety, TestHyundaiLegacyEngineTemperaturesSafety):
+  TX_MSGS = TestHyundaiLongitudinalSafety.TX_MSGS + [[0x7E0, 1], [0x7DF, 1], [0x7E1, 1]]
+
+  def setUp(self):
+    self.packer = CANPackerPanda("hyundai_kia_generic")
+    self.safety = libsafety_py.libsafety
+    self.safety.set_current_safety_param_sp(0)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai, HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.ENGINE_TEMPERATURES)
+    self.safety.init_tests()
+
+  def test_incompatible_longitudinal_configuration_denies_telemetry(self):
+    for flags in (HyundaiSafetyFlags.EV_GAS, HyundaiSafetyFlags.HYBRID_GAS, HyundaiSafetyFlags.CAMERA_SCC,
+                  HyundaiSafetyFlags.CANFD_LKA_STEERING, HyundaiSafetyFlags.CANFD_ALT_BUTTONS,
+                  HyundaiSafetyFlags.CANFD_LKA_STEERING_ALT, HyundaiSafetyFlags.FCEV_GAS):
+      self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai, flags | HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.ENGINE_TEMPERATURES)
+      self.safety.init_tests()
+      self.assertFalse(self.safety.safety_uses_obd_can2())
+      for addr, dat in self.TEMPERATURE_MSGS:
+        self.assertFalse(self._tx(libsafety_py.make_CANPacket(addr, 1, dat)))
+    for param_sp in (HyundaiSafetyFlagsSP.ESCC, HyundaiSafetyFlagsSP.NON_SCC):
+      self.safety.set_current_safety_param_sp(param_sp)
+      self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai, HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.ENGINE_TEMPERATURES)
+      self.safety.init_tests()
+      self.assertFalse(self.safety.safety_uses_obd_can2())
+      for addr, dat in self.TEMPERATURE_MSGS:
+        self.assertFalse(self._tx(libsafety_py.make_CANPacket(addr, 1, dat)))
 
 
 class TestHyundaiLongitudinalSafetyCameraSCC(HyundaiLongitudinalBase, TestHyundaiSafety):
