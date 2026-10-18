@@ -106,17 +106,18 @@ void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) 
   const int row_count = 2 * (int(show_engine_temperatures) + int(show_dct_temperatures)) + int(show_boost);
   if (row_count == 0 || surface_rect.width() < 800) return;
 
-  // A narrow card fits beside the speed display even in a split camera view.
-  // Compact five rows to keep the card clear of both upper and lower buttons.
+  // Use a wider card for readable values, leaving room for the speed display
+  // in split camera views. Compact five rows to stay between the buttons.
   const bool compact = row_count == 5;
-  const int row_height = compact ? 96 : 107;
-  const QRect card(surface_rect.right() + 1 - UI_BORDER_SIZE - 236,
-                   surface_rect.top() + UI_BORDER_SIZE + btn_size + 20, 236, row_count * row_height + 4);
+  const int card_width = std::min(320, surface_rect.width() / 2 - 150);
+  const int row_height = compact ? 106 : 128;
+  const QRect card(surface_rect.right() + 1 - UI_BORDER_SIZE - card_width,
+                   surface_rect.top() + UI_BORDER_SIZE + btn_size + 20, card_width, row_count * row_height + 4);
   if (card.bottom() + 20 >= surface_rect.bottom() + 1 - UI_BORDER_SIZE - btn_size) return;
 
   p.save();
   p.setPen(Qt::NoPen);
-  p.setBrush(QColor(0, 0, 0, 150));
+  p.setBrush(QColor(0, 0, 0, 185));
   p.drawRoundedRect(card, 24, 24);
   int row = 0;
   auto draw_reading = [&](const QString &label, const QString &value, const QColor &background = QColor(Qt::transparent)) {
@@ -130,23 +131,23 @@ void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) 
       p.fillRect(QRect(card.x(), row_top, card.width(), row_bottom - row_top), background);
       p.restore();
     }
-    const int top_padding = compact ? 8 : 12;
+    const int top_padding = compact ? 4 : 8;
     const int top = card.y() + top_padding + row * row_height;
     if (row > 0) {
       p.setPen(QPen(QColor(255, 255, 255, 35), 1));
       p.drawLine(card.x() + 24, top - top_padding, card.right() - 24, top - top_padding);
     }
-    const QRect label_rect(card.x() + 16, top, card.width() - 32, compact ? 30 : 34);
-    p.setFont(InterFont(compact ? 26 : 28, QFont::DemiBold));
-    p.setPen(QColor(255, 255, 255, 175));
+    const QRect label_rect(card.x() + 20, top, card.width() - 40, compact ? 40 : 42);
+    p.setFont(InterFont(compact ? 32 : 34, QFont::DemiBold));
+    p.setPen(QColor(255, 255, 255, 225));
     p.drawText(label_rect, Qt::AlignCenter, p.fontMetrics().elidedText(label, Qt::ElideRight, label_rect.width()));
-    int value_font_size = compact ? 42 : 44;
-    p.setFont(InterFont(value_font_size, QFont::DemiBold));
+    int value_font_size = compact ? 52 : 60;
+    p.setFont(InterFont(value_font_size, QFont::Bold));
     while (p.fontMetrics().horizontalAdvance(value) > label_rect.width() && value_font_size > 24) {
-      p.setFont(InterFont(--value_font_size, QFont::DemiBold));
+      p.setFont(InterFont(--value_font_size, QFont::Bold));
     }
-    p.setPen(QColor(255, 255, 255, 235));
-    p.drawText(QRect(card.x() + 16, top + (compact ? 29 : 32), card.width() - 32, compact ? 52 : 54), Qt::AlignCenter,
+    p.setPen(Qt::white);
+    p.drawText(QRect(card.x() + 20, top + (compact ? 36 : 40), card.width() - 40, compact ? 64 : 76), Qt::AlignCenter,
                p.fontMetrics().elidedText(value, Qt::ElideRight, label_rect.width()));
     ++row;
   };
