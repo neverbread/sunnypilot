@@ -76,7 +76,7 @@ void ModelRenderer::update_model(const cereal::ModelDataV2::Reader &model, const
     max_distance = std::clamp((float)(lead_d - fmin(lead_d * 0.35, 10.)), 0.0f, max_distance);
   }
   max_idx = get_path_length_idx(model_position, max_distance);
-  mapLineToPolygon(model_position, 0.9, path_offset_z, &track_vertices, max_idx, false);
+  mapLineToPolygon(model_position, path_half_width, path_offset_z, &track_vertices, max_idx, false);
 }
 
 void ModelRenderer::drawLaneLines(QPainter &painter) {
@@ -123,20 +123,21 @@ void ModelRenderer::drawPath(QPainter &painter, const cereal::ModelDataV2::Reade
     }
 
   } else {
-    updatePathGradient(bg);
+    const bool allow_throttle = (*uiState()->sm)["longitudinalPlan"].getLongitudinalPlan().getAllowThrottle() || !longitudinal_control;
+    updatePathGradient(bg, allow_throttle);
   }
 
   painter.setBrush(bg);
   painter.drawPolygon(track_vertices);
 }
 
-void ModelRenderer::updatePathGradient(QLinearGradient &bg) {
-  static const QColor throttle_colors[] = {
+void ModelRenderer::updatePathGradient(QLinearGradient &bg, bool color_enabled) {
+  static const QColor active_colors[] = {
       QColor::fromHslF(148. / 360., 0.94, 0.51, 0.4),
       QColor::fromHslF(112. / 360., 1.0, 0.68, 0.35),
       QColor::fromHslF(112. / 360., 1.0, 0.68, 0.0)};
 
-  static const QColor no_throttle_colors[] = {
+  static const QColor inactive_colors[] = {
       QColor::fromHslF(148. / 360., 0.0, 0.95, 0.4),
       QColor::fromHslF(112. / 360., 0.0, 0.95, 0.35),
       QColor::fromHslF(112. / 360., 0.0, 0.95, 0.0),
@@ -145,16 +146,15 @@ void ModelRenderer::updatePathGradient(QLinearGradient &bg) {
   // Transition speed; 0.1 corresponds to 0.5 seconds at UI_FREQ
   constexpr float transition_speed = 0.1f;
 
-  // Start transition if throttle state changes
-  bool allow_throttle = (*uiState()->sm)["longitudinalPlan"].getLongitudinalPlan().getAllowThrottle() || !longitudinal_control;
-  if (allow_throttle != prev_allow_throttle) {
-    prev_allow_throttle = allow_throttle;
+  // Start transition if the requested path color changes.
+  if (color_enabled != prev_path_color_enabled) {
+    prev_path_color_enabled = color_enabled;
     // Invert blend factor for a smooth transition when the state changes mid-animation
     blend_factor = std::max(1.0f - blend_factor, 0.0f);
   }
 
-  const QColor *begin_colors = allow_throttle ? no_throttle_colors : throttle_colors;
-  const QColor *end_colors = allow_throttle ? throttle_colors : no_throttle_colors;
+  const QColor *begin_colors = color_enabled ? inactive_colors : active_colors;
+  const QColor *end_colors = color_enabled ? active_colors : inactive_colors;
   if (blend_factor < 1.0f) {
     blend_factor = std::min(blend_factor + transition_speed, 1.0f);
   }

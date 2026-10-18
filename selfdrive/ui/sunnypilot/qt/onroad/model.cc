@@ -10,6 +10,38 @@
 #include <algorithm>
 #include <cmath>
 
+#include "common/timing.h"
+
+void ModelRendererSP::updatePathState(const UIState &s) {
+  const auto &sm = *s.sm;
+  const uint64_t now = nanos_since_boot();
+  const auto fresh = [&](const char *service) {
+    return sm.alive(service) && sm.valid(service) && sm.rcv_frame(service) > s.scene.started_frame &&
+           now - sm.rcv_time(service) <= 3e9;
+  };
+  const auto mads = sm["selfdriveStateSP"].getSelfdriveStateSP().getMads();
+  lateral_active = false;
+  if (s.scene.started) {
+    if (mads.getAvailable()) {
+      // Overrides retain the wide path while MADS is enabled; a pause does not.
+      lateral_active = fresh("selfdriveStateSP") && mads.getEnabled() &&
+                       mads.getState() != cereal::ModularAssistiveDrivingSystem::ModularAssistiveDrivingSystemState::PAUSED;
+    } else {
+      lateral_active = fresh("selfdriveState") && (s.status == STATUS_ENGAGED || s.status == STATUS_LAT_ONLY);
+    }
+  }
+
+  const float target_width = lateral_active ? 0.9f : 0.4f;
+  if (path_started_frame != s.scene.started_frame) {
+    // Do not carry a previous drive's engagement appearance into this drive.
+    path_started_frame = s.scene.started_frame;
+    path_width_filter.reset(target_width);
+    prev_path_color_enabled = lateral_active;
+    blend_factor = 1.0f;
+  }
+  path_half_width = path_width_filter.update(target_width);
+}
+
 void ModelRendererSP::mapLaneToPolygon(const cereal::XYZTData::Reader &left_line, const cereal::XYZTData::Reader &right_line,
                                       QPolygonF *vertices, int max_idx) {
   const auto lx = left_line.getX(), ly = left_line.getY(), lz = left_line.getZ();
@@ -39,6 +71,7 @@ void ModelRendererSP::mapLaneToPolygon(const cereal::XYZTData::Reader &left_line
 }
 
 void ModelRendererSP::update_model(const cereal::ModelDataV2::Reader &model, const cereal::RadarState::LeadData::Reader &lead) {
+  updatePathState(*uiState());
   ModelRenderer::update_model(model, lead);
   const auto &model_position = model.getPosition();
   const auto &lane_lines = model.getLaneLines();
@@ -94,7 +127,7 @@ void ModelRendererSP::drawPath(QPainter &painter, const cereal::ModelDataV2::Rea
   bool rainbow = Params().getBool("RainbowMode");
   //float v_ego = sm["carState"].getCarState().getVEgo();
 
-  if (rainbow) {
+  if (rainbow && lateral_active) {
     // Simple time-based animation
     float time_offset = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count() / 1000.0f;
@@ -125,8 +158,14 @@ void ModelRendererSP::drawPath(QPainter &painter, const cereal::ModelDataV2::Rea
 
     painter.setBrush(bg);
     painter.drawPolygon(track_vertices);
-  } else {
-    // Normal path rendering
+  } else if (experimental_mode && lateral_active) {
     ModelRenderer::drawPath(painter, model, surface_rect.height());
+  } else {
+    // Lateral engagement controls the normal path color independently of ACC.
+    // Inactive paths are gray even in Rainbow and Experimental modes.
+    QLinearGradient bg(0, surface_rect.height(), 0, 0);
+    updatePathGradient(bg, lateral_active);
+    painter.setBrush(bg);
+    painter.drawPolygon(track_vertices);
   }
 }

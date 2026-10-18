@@ -48,16 +48,17 @@ protected:
   virtual void drawPath(QPainter &painter, const cereal::ModelDataV2::Reader &model, const QRect &surface_rect) {;
     drawPath(painter, model, surface_rect.height());
   }
-  void updatePathGradient(QLinearGradient &bg);
+  void updatePathGradient(QLinearGradient &bg, bool color_enabled);
   QColor blendColors(const QColor &start, const QColor &end, float t);
 
   bool longitudinal_control = false;
   bool experimental_mode = false;
   float blend_factor = 1.0f;
-  bool prev_allow_throttle = true;
+  bool prev_path_color_enabled = true;
   float lane_line_probs[4] = {};
   float road_edge_stds[2] = {};
   float path_offset_z = 1.22f;
+  float path_half_width = 0.9f;
   QPolygonF track_vertices;
   QPolygonF lane_line_vertices[4] = {};
   QPolygonF road_edge_vertices[2] = {};
