@@ -62,6 +62,13 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       false,
     },
     {
+      "BrakingStatus",
+      tr("Red Speed While Braking"),
+      tr("Turn the current speed red when your vehicle reports that the brake lights are on or the brake pedal is pressed. The speed returns to white when neither is reported."),
+      "../assets/icons/metric.png",
+      false,
+    },
+    {
       "LeadDepartAlert",
       tr("Lead Vehicle Departure Chime"),
       tr("Play a chime when the vehicle ahead starts moving while you remain stopped. Check the road before proceeding."),

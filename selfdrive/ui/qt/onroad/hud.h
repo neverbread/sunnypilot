@@ -20,9 +20,10 @@ public:
 protected:
   void drawSetSpeed(QPainter &p, const QRect &surface_rect);
   void drawCurrentSpeed(QPainter &p, const QRect &surface_rect);
-  void drawText(QPainter &p, int x, int y, const QString &text, int alpha = 255);
+  void drawText(QPainter &p, int x, int y, const QString &text, const QColor &color = Qt::white);
 
   float speed = 0;
+  QColor current_speed_color = Qt::white;
   float set_speed = 0;
   bool is_cruise_set = false;
   bool is_cruise_available = true;

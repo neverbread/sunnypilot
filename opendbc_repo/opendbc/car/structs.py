@@ -130,4 +130,4 @@ class CarControlSP:
 
 @auto_dataclass
 class CarStateSP:
-  pass
+  brakeLights: bool = auto_field()

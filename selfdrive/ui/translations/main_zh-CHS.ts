@@ -2319,6 +2319,14 @@ Warning: You are on a metered connection!</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <source>Red Speed While Braking</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Turn the current speed red when your vehicle reports that the brake lights are on or the brake pedal is pressed. The speed returns to white when neither is reported.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>Lead Vehicle Departure Chime</source>
         <translation type="unfinished"></translation>
     </message>

@@ -142,6 +142,8 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     # TODO: Find brake pressure
     ret.brake = 0
     ret.brakePressed = cp.vl["TCS13"]["DriverOverride"] == 2  # 2 includes regen braking by user on HEV/EV
+    # The lamp signal also covers stock SCC braking without driver pedal input.
+    ret_sp.brakeLights = bool(cp.vl["TCS13"]["BrakeLight"]) or ret.brakePressed
     ret.brakeHoldActive = cp.vl["TCS15"]["AVH_LAMP"] == 2  # 0 OFF, 1 ERROR, 2 ACTIVE, 3 READY
     ret.parkingBrake = cp.vl["TCS13"]["PBRAKE_ACT"] == 1
     ret.espDisabled = cp.vl["TCS11"]["TCS_PAS"] == 1

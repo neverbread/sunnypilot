@@ -162,6 +162,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     // Custom driving reminders and vehicle readings
     {"BlindspotLaneHighlight", {PERSISTENT | BACKUP, BOOL, "1"}},
+    {"BrakingStatus", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"LeadDepartAlert", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"GreenLightAlert", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"DisengageLateralOnCancel", {PERSISTENT | BACKUP, BOOL, "1"}},

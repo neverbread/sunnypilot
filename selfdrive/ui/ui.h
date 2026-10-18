@@ -64,6 +64,7 @@ typedef struct UIScene {
   float light_sensor = -1;
   bool started, ignition, is_metric, recording_audio;
   bool blindspot_lane_highlight = false;
+  bool braking_status = false;
   bool engine_temperature_display = false;
   bool dct_temperature_display = false;
   bool boost_display = false;

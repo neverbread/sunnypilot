@@ -32,6 +32,17 @@ void HudRendererSP::updateState(const UIState &s) {
 
   const SubMaster &sm = *s.sm;
   const uint64_t now = nanos_since_boot();
+  const auto fresh_brake_state = [&](const char *service) {
+    return sm.alive(service) && sm.valid(service) && sm.rcv_frame(service) > s.scene.started_frame &&
+           now - sm.rcv_time(service) <= 500000000ULL;
+  };
+  // Keep brake status independent of the optional vehicle readings below.
+  // The pedal remains available on cars without a reported brake-light signal.
+  const bool braking = s.scene.started && s.scene.braking_status && fresh_brake_state("carState") &&
+                       (sm["carState"].getCarState().getBrakePressed() ||
+                        (fresh_brake_state("carStateSP") && sm["carStateSP"].getCarStateSP().getBrakeLights()));
+  current_speed_color = braking ? QColor(255, 0, 0) : QColor(Qt::white);
+
   const bool current_drive = sm.rcv_frame("engineTemperature") > s.scene.started_frame;
   show_engine_temperatures = false;
   show_dct_temperatures = false;

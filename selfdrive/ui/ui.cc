@@ -70,6 +70,7 @@ void ui_update_params(UIState *s) {
   auto params = Params();
   s->scene.is_metric = params.getBool("IsMetric");
   s->scene.blindspot_lane_highlight = params.getBool("BlindspotLaneHighlight");
+  s->scene.braking_status = params.getBool("BrakingStatus");
   s->scene.engine_temperature_display = params.getBool("EngineTemperatureDisplay");
   s->scene.dct_temperature_display = params.getBool("DctTemperatureDisplay");
   s->scene.boost_display = params.getBool("BoostDisplay");
