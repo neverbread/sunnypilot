@@ -28,9 +28,9 @@ TEST_CASE("Temperature requests expire and cannot flood the bus") {
   CHECK_FALSE(requests.get(7, 1, 1, true));
   CHECK_FALSE(requests.get(65535, 1, 1, true));
   REQUIRE(requests.get(1, 1000000000ULL, 1000000000ULL, true));
-  CHECK_FALSE(requests.get(0, 1449999999ULL, 1449999999ULL, true));
-  CHECK_FALSE(requests.get(2, 1500000000ULL, 1500000000ULL, true));
-  REQUIRE(requests.get(0, 1500000000ULL, 1500000000ULL, true));
+  CHECK_FALSE(requests.get(0, 1229999999ULL, 1229999999ULL, true));
+  CHECK_FALSE(requests.get(2, 1230000000ULL, 1230000000ULL, true));
+  REQUIRE(requests.get(0, 1230000000ULL, 1230000000ULL, true));
   REQUIRE(requests.get(1, 2000000000ULL, 2000000000ULL, true));
   CHECK_FALSE(requests.get(2, 2100000000ULL, 2100000000ULL, false));
   CHECK_FALSE(requests.get(2, 2200000000ULL, 2200000000ULL, true));
@@ -46,8 +46,8 @@ TEST_CASE("Boost uses only the fixed pressure reads without flow control") {
   CHECK(pressure->data == std::array<uint8_t, 8>{3, 1, 5, 0x0B, 0, 0, 0, 0});
   CHECK_FALSE(requests.get(EngineTemperatureRequests::FLOW_CONTROL, 1100000000ULL, 1100000000ULL, true));
   CHECK_FALSE(requests.get(EngineTemperatureRequests::CLUTCH_FLOW_CONTROL, 1100000000ULL, 1100000000ULL, true));
-  CHECK_FALSE(requests.get(EngineTemperatureRequests::BAROMETER, 1449999999ULL, 1449999999ULL, true));
-  auto barometer = requests.get(EngineTemperatureRequests::BAROMETER, 1450000000ULL, 1450000000ULL, true);
+  CHECK_FALSE(requests.get(EngineTemperatureRequests::BAROMETER, 1229999999ULL, 1229999999ULL, true));
+  auto barometer = requests.get(EngineTemperatureRequests::BAROMETER, 1230000000ULL, 1230000000ULL, true);
   REQUIRE(barometer);
   CHECK(barometer->address == 0x7DF);
   CHECK(barometer->data == std::array<uint8_t, 8>{2, 1, 0x33, 0, 0, 0, 0, 0});

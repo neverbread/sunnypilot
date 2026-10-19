@@ -63,7 +63,7 @@ def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
 
 def engine_temperatures(started: bool, params: Params, CP: car.CarParams) -> bool:
   from openpilot.sunnypilot.selfdrive.car.enginetempd import supports_engine_temperatures
-  enabled = any(params.get_bool(key) for key in ("EngineTemperatureDisplay", "DctTemperatureDisplay", "BoostDisplay"))
+  enabled = any(params.get_bool(key) for key in ("EngineTemperatureDisplay", "DctTemperatureDisplay", "BoostDisplay", "ClutchStateDisplay"))
   return started and enabled and supports_engine_temperatures(CP)
 
 def use_github_runner(started, params, CP: car.CarParams) -> bool:

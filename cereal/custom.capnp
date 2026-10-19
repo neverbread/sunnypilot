@@ -285,6 +285,20 @@ struct EngineTemperature @0xcb9fd56c7057593a {
   clutch2Valid @8 :Bool;
   boostKpa @9 :Float32;
   boostValid @10 :Bool;
+
+  # Clutch engagement states, as 0 unknown / 1 disengaged / 2 engaged / 3 slipping.
+  # Plain numbers, not an enum, so the daemon can keep assigning a flat dict.
+  clutch1State @11 :Float32;
+  clutch2State @12 :Float32;
+  # The raw payload values behind those states, so thresholds can be retuned
+  # from a logged route. They expire with the states, not independently.
+  gear @13 :Float32;
+  nextGear @14 :Float32;
+  engineRpm @15 :Float32;
+  inputShaft1Rpm @16 :Float32;
+  inputShaft2Rpm @17 :Float32;
+  clutch1SlipRpm @18 :Float32;
+  clutch2SlipRpm @19 :Float32;
 }
 
 struct EngineTemperatureRequest @0xc2243c65e0340384 {

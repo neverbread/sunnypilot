@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include <QColor>
 #include <QPainter>
 
@@ -22,9 +24,14 @@ public:
 
 private:
   void drawVehicleReadings(QPainter &p, const QRect &surface_rect);
+  void drawClutchIndicators(QPainter &p, const QRect &surface_rect);
   bool show_engine_temperatures = false;
   bool show_dct_temperatures = false;
   bool show_boost = false;
+  bool show_clutch_states = false;
+  // 0 unknown / 1 disengaged / 2 engaged / 3 slipping, as engineTemperature publishes them.
+  int clutch1_state = 0, clutch2_state = 0;
+  uint64_t last_clutch_state_nanos = 0;
   QColor oil_background = Qt::transparent;
   QColor boost_background = Qt::transparent;
   QString oil_temperature;

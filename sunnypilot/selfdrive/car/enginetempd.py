@@ -104,7 +104,7 @@ def main():
     now = time.clock_gettime(time.CLOCK_BOOTTIME)
     fresh = sm.all_checks() and state_messages_fresh(time.monotonic(), sm.recv_time)
     engine_enabled = params.get_bool("EngineTemperatureDisplay")
-    clutch_enabled = params.get_bool("DctTemperatureDisplay")
+    clutch_enabled = params.get_bool("DctTemperatureDisplay") or params.get_bool("ClutchStateDisplay")
     boost_enabled = params.get_bool("BoostDisplay")
     session.configure(engine_enabled, clutch_enabled, boost_enabled)
     ready = diagnostics_ready(supported, params.get_bool("ControlsReady") and (engine_enabled or clutch_enabled or boost_enabled),

@@ -23,6 +23,12 @@ constexpr double KPA_TO_PSI = 0.14503773800722;
 // https://n75motorsports.ca/products/ecu-tuning-elantra-sport-gtsport-nline
 constexpr double BOOST_FULL_RED_PSI = 19.0;
 constexpr double VACUUM_FULL_BLUE_KPA = 101.325;  // Sea-level full vacuum, about -14.7 psi gauge.
+
+// engineTemperature publishes the clutch states as plain numbers, not an enum.
+constexpr int CLUTCH_UNKNOWN = 0, CLUTCH_DISENGAGED = 1, CLUTCH_ENGAGED = 2, CLUTCH_SLIPPING = 3;
+// The reader already holds the last decoded pair for five seconds. Holding it
+// again here keeps a single dropped publish from flashing the glyphs off.
+constexpr uint64_t CLUTCH_HOLD_NANOS = 10000000000ULL;
 }  // namespace
 
 HudRendererSP::HudRendererSP() {}
@@ -47,6 +53,7 @@ void HudRendererSP::updateState(const UIState &s) {
   show_engine_temperatures = false;
   show_dct_temperatures = false;
   show_boost = false;
+  show_clutch_states = false;
   oil_background = Qt::transparent;
   boost_background = Qt::transparent;
   if (!current_drive) return;
@@ -61,6 +68,7 @@ void HudRendererSP::updateState(const UIState &s) {
   show_engine_temperatures = s.scene.engine_temperature_display && visible;
   show_dct_temperatures = s.scene.dct_temperature_display && visible;
   show_boost = s.scene.boost_display && visible;
+  show_clutch_states = s.scene.clutch_state_display && visible;
   const bool fresh = current_drive && sm.alive("engineTemperature") && sm.valid("engineTemperature") &&
                      now - sm.rcv_time("engineTemperature") <= 3e9;
   const QString unit = is_metric ? QStringLiteral("\u00b0C") : QStringLiteral("\u00b0F");
@@ -95,11 +103,21 @@ void HudRendererSP::updateState(const UIState &s) {
     const int alpha = static_cast<int>(std::lround(190.0 * std::sqrt(fraction)));
     boost_background = boost_kpa < 0.0f ? QColor(35, 105, 245, alpha) : QColor(230, 45, 55, alpha);
   }
+  if (fresh) {
+    // An unknown pair is a real reading — neutral, or the transmission not
+    // reporting a gear — so take it as published while the service is fresh.
+    clutch1_state = static_cast<int>(temperatures.getClutch1State());
+    clutch2_state = static_cast<int>(temperatures.getClutch2State());
+    last_clutch_state_nanos = now;
+  } else if (now - last_clutch_state_nanos > CLUTCH_HOLD_NANOS) {
+    clutch1_state = clutch2_state = CLUTCH_UNKNOWN;
+  }
 }
 
 void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
   HudRenderer::draw(p, surface_rect);
   drawVehicleReadings(p, surface_rect);
+  drawClutchIndicators(p, surface_rect);
 }
 
 void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) {
@@ -161,6 +179,75 @@ void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) 
   }
   if (show_boost) {
     draw_reading(tr("BOOST"), boost_pressure, boost_background);
+  }
+  p.restore();
+}
+
+void HudRendererSP::drawClutchIndicators(QPainter &p, const QRect &surface_rect) {
+  if (!show_clutch_states || surface_rect.width() < 800) return;
+
+  // Left column, centred between the same anchors the readings card uses, which
+  // keeps the glyphs below the set-speed card and clear of the driver face.
+  const int glyph_size = 84, glyph_gap = 28, panel_padding = 20, caption_height = 40;
+  const int panel_height = caption_height + glyph_size + 2 * panel_padding;
+  const int top_anchor = surface_rect.top() + UI_BORDER_SIZE + btn_size + 20;
+  const int bottom_anchor = surface_rect.bottom() + 1 - UI_BORDER_SIZE - btn_size;
+  const QRect panel(surface_rect.left() + UI_BORDER_SIZE, (top_anchor + bottom_anchor - panel_height) / 2,
+                    2 * glyph_size + glyph_gap + 2 * panel_padding, panel_height);
+
+  p.save();
+  p.setPen(Qt::NoPen);
+  p.setBrush(QColor(0, 0, 0, 185));
+  p.drawRoundedRect(panel, 24, 24);
+  p.setFont(InterFont(26, QFont::DemiBold));
+  p.setPen(QColor(255, 255, 255, 180));
+  p.drawText(QRect(panel.x() + panel_padding, panel.y() + panel_padding - 4,
+                   panel.width() - 2 * panel_padding, caption_height), Qt::AlignCenter, tr("CLUTCH"));
+
+  const QColor amber(255, 178, 32);
+  const int states[2] = {clutch1_state, clutch2_state};
+  for (int i = 0; i < 2; ++i) {
+    const QRectF circle(panel.x() + panel_padding + i * (glyph_size + glyph_gap),
+                        panel.y() + panel_padding + caption_height, glyph_size, glyph_size);
+    if (states[i] == CLUTCH_SLIPPING) {
+      // Half fill reads as a partly engaged clutch. Clip the fill alone so the
+      // amber ring keeps its full circumference.
+      p.save();
+      QPainterPath lower_half;
+      lower_half.addRect(QRectF(circle.left(), circle.center().y(), circle.width(), circle.height() / 2.0));
+      p.setClipPath(lower_half, Qt::IntersectClip);
+      p.setPen(Qt::NoPen);
+      p.setBrush(amber);
+      p.drawEllipse(circle);
+      p.restore();
+    }
+
+    QColor fill = Qt::transparent, text = QColor(255, 255, 255, 150);
+    QPen pen(QColor(255, 255, 255, 110), 4);
+    switch (states[i]) {
+      case CLUTCH_ENGAGED:
+        fill = QColor(255, 255, 255, 235);
+        pen = QPen(QColor(255, 255, 255, 60), 2);
+        text = QColor(20, 20, 20, 235);
+        break;
+      case CLUTCH_SLIPPING:
+        pen = QPen(amber, 5);
+        text = QColor(255, 255, 255, 240);
+        break;
+      case CLUTCH_DISENGAGED:
+        break;
+      default:
+        pen = QPen(QColor(255, 255, 255, 60), 3, Qt::CustomDashLine);
+        pen.setDashPattern({6, 6});
+        text = QColor(255, 255, 255, 70);
+        break;
+    }
+    p.setBrush(fill);
+    p.setPen(pen);
+    p.drawEllipse(circle);
+    p.setFont(InterFont(38, QFont::Bold));
+    p.setPen(text);
+    p.drawText(circle, Qt::AlignCenter, QString::number(i + 1));
   }
   p.restore();
 }

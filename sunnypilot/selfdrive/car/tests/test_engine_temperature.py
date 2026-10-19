@@ -92,6 +92,10 @@ class TestEngineTemperature(unittest.TestCase):
                                               "coolantCelsius": 86.0, "coolantValid": True,
                                               "clutch1Celsius": 0.0, "clutch1Valid": False,
                                               "clutch2Celsius": 0.0, "clutch2Valid": False,
+                                              "gear": 0.0, "nextGear": 0.0, "engineRpm": 0.0,
+                                              "inputShaft1Rpm": 0.0, "inputShaft2Rpm": 0.0,
+                                              "clutch1SlipRpm": 0.0, "clutch2SlipRpm": 0.0,
+                                              "clutch1State": 0, "clutch2State": 0,
                                               "boostKpa": 0.0, "boostValid": False})
 
   def test_poll_cadence_with_no_replies(self):
@@ -369,8 +373,12 @@ class TestBoost(unittest.TestCase):
             readings = reader.readings(now)
             for sensor, enabled in (("oil", engine), ("coolant", engine), ("clutch1", clutch), ("clutch2", clutch), ("boost", boost)):
               self.assertEqual(readings[sensor + "Valid"], enabled)
-        interval = temperature.BOOST_POLL_INTERVAL if boost else temperature.POLL_INTERVAL
+        interval = temperature.REQUEST_SPACING if clutch else (
+            temperature.BOOST_POLL_INTERVAL if boost else temperature.POLL_INTERVAL)
         self.assertTrue(all(b - a >= interval for a, b in itertools.pairwise(primary_times)))
+        # Explicit contract with pandad's global 230 ms floor in engine_temperature.h:
+        # asking more often than that only burns request timeouts.
+        self.assertTrue(all(b - a >= 0.23 for a, b in itertools.pairwise(primary_times)))
         if boost:
           self.assertTrue(all(b - a <= 1.04 for a, b in itertools.pairwise(pressure_times)))
           self.assertEqual(len(barometer_times), 2)
@@ -409,17 +417,45 @@ class TestClutchTemperatures(unittest.TestCase):
     payload[32:36] = bytes.fromhex("0000 FFFF")
     self.assertEqual(temperature.decode_clutch_temperatures(bytes(payload)), (0.0, 65535.0))
 
+  def measure_rates(self, reader, seconds=60, answers=None):
+    """Rates over a window, since 0.24 s spacing does not align with a 0.1 s grid."""
+    replies = {temperature.COOLANT_REQUEST: [single_frame(COOLANT_PAYLOAD[:3])],
+               temperature.PRESSURE_REQUEST: [single_frame(COOLANT_PAYLOAD)],
+               temperature.BAROMETER_REQUEST: [single_frame(bytes.fromhex("413365"))],
+               temperature.OIL_REQUEST: oil_frames(), temperature.CLUTCH_REQUEST: clutch_frames()}
+    counts = {name: 0 for name in ("coolant", "oil", "clutch", "pressure", "barometer")}
+    pending = []
+    for tick in range(seconds * 50):
+      outgoing = reader.update(10.0 + tick / 50, pending)
+      pending = []
+      for request in outgoing:
+        if request not in replies or (answers is not None and request not in answers):
+          continue  # Flow control follows a primary request; not a slot of its own.
+        counts[temperature.REQUEST_KINDS[request]] += 1
+        pending = replies[request]
+    return {name: count / seconds for name, count in counts.items()}
+
   def test_clutch_only_cadence(self):
-    for index in range(100):
-      expected = [temperature.CLUTCH_REQUEST] if index % 10 == 0 else []
-      self.assertEqual(self.reader.update(index / 10, []), expected)
+    rates = self.measure_rates(self.reader)
+    self.assertAlmostEqual(rates["clutch"], 2.0, delta=0.1)
+    self.assertEqual(rates["coolant"] + rates["oil"] + rates["pressure"], 0)
 
   def test_all_groups_share_poll_cadence(self):
     reader = temperature.EngineTemperatureReader(engine_enabled=True, clutch_enabled=True)
-    expected_order = [temperature.COOLANT_REQUEST, temperature.OIL_REQUEST, temperature.CLUTCH_REQUEST]
-    for index in range(120):
-      expected = [expected_order[(index // 10) % 3]] if index % 10 == 0 else []
-      self.assertEqual(reader.update(index / 10, []), expected)
+    rates = self.measure_rates(reader)
+    # The clutch drives a live indicator; the slow-moving temperatures split the rest.
+    self.assertAlmostEqual(rates["clutch"], 2.0, delta=0.1)
+    self.assertAlmostEqual(rates["coolant"], 1.0, delta=0.1)
+    self.assertAlmostEqual(rates["oil"], 1.0, delta=0.1)
+    self.assertLessEqual(sum(rates.values()), 4.3)  # pandad's 230 ms floor
+
+  def test_unanswered_clutch_backs_off_and_lets_temperatures_through(self):
+    # Priority must not starve the ECM reads if only the TCM stops answering.
+    reader = temperature.EngineTemperatureReader(engine_enabled=True, clutch_enabled=True)
+    rates = self.measure_rates(reader, answers={temperature.COOLANT_REQUEST, temperature.OIL_REQUEST})
+    self.assertLess(rates["clutch"], 1.0)
+    self.assertGreater(rates["oil"], 0.5)
+    self.assertGreater(rates["coolant"], 0.5)
 
   def test_both_groups_disabled(self):
     reader = temperature.EngineTemperatureReader(engine_enabled=False, clutch_enabled=False)
@@ -466,14 +502,27 @@ class TestClutchTemperatures(unittest.TestCase):
     self.assert_unavailable(0.2)
     self.reader.update(0.3, clutch_frames()[1:])
     self.assertTrue(self.reader.readings(0.3)["clutch1Valid"])
+    # Step until an oil transaction is the one in flight, so this does not depend
+    # on which slot the scheduler happens to give the clutch.
     reader = temperature.EngineTemperatureReader(engine_enabled=True, clutch_enabled=True)
-    reader.update(0.0, [])
-    reader.update(1.0, [])
-    reader.update(1.1, oil_frames()[:1])
-    reader.update(1.2, clutch_frames()[1:])
-    self.assertFalse(reader.readings(1.2)["oilValid"])
-    reader.update(1.3, oil_frames()[1:])
-    self.assertTrue(reader.readings(1.3)["oilValid"])
+    pending, request, started = [], [], 0.0
+    for tick in range(200):
+      started = tick / 50
+      request = reader.update(started, pending)
+      pending = []
+      for req in request:
+        if req == temperature.CLUTCH_REQUEST:
+          pending = clutch_frames()
+        elif req == temperature.COOLANT_REQUEST:
+          pending = [single_frame(COOLANT_PAYLOAD[:3])]
+      if request == [temperature.OIL_REQUEST]:
+        break
+    self.assertEqual(request, [temperature.OIL_REQUEST])
+    reader.update(started + 0.1, oil_frames()[:1])
+    reader.update(started + 0.2, clutch_frames()[1:])
+    self.assertFalse(reader.readings(started + 0.2)["oilValid"])
+    reader.update(started + 0.3, oil_frames()[1:])
+    self.assertTrue(reader.readings(started + 0.3)["oilValid"])
 
   def test_tcm_payload_cannot_satisfy_oil_transaction(self):
     reader = temperature.EngineTemperatureReader(engine_enabled=True, clutch_enabled=True)
@@ -534,13 +583,18 @@ class TestClutchTemperatures(unittest.TestCase):
 
   def test_both_groups_have_independent_freshness(self):
     reader = temperature.EngineTemperatureReader(engine_enabled=True, clutch_enabled=True)
-    reader.update(0.0, [])
-    reader.update(0.1, [single_frame(COOLANT_PAYLOAD)])
-    reader.update(1.0, [])
-    reader.update(1.1, oil_frames())
-    reader.update(2.0, [])
-    reader.update(2.1, clutch_frames())
-    readings = reader.readings(6.1)
+    replies = {temperature.COOLANT_REQUEST: [single_frame(COOLANT_PAYLOAD[:3])],
+               temperature.OIL_REQUEST: oil_frames(), temperature.CLUTCH_REQUEST: clutch_frames()}
+    pending = []
+    for tick in range(1200):
+      now = tick / 50
+      outgoing = reader.update(now, pending)
+      pending = []
+      for request in outgoing:
+        # The ECM goes silent after 10 s; only the TCM keeps replying.
+        if request in replies and (request == temperature.CLUTCH_REQUEST or now < 10.0):
+          pending = replies[request]
+    readings = reader.readings(23.9)
     self.assertFalse(readings["oilValid"])
     self.assertFalse(readings["coolantValid"])
     self.assertTrue(readings["clutch1Valid"])
@@ -554,6 +608,146 @@ class TestClutchTemperatures(unittest.TestCase):
     self.reader.update(0.1, frames)
     self.assertEqual(self.reader.readings(0.1)["clutch1Celsius"], 63.0)
     self.assertEqual(self.reader.readings(0.1)["clutch2Celsius"], 35.0)
+
+
+def clutch_payload(gear=1, next_gear=1, engine=800.0, shaft1=0.0, shaft2=0.0, slip1=0.0, slip2=0.0):
+  """The recorded fixture with its mapped fields replaced, offsets written once."""
+  payload = bytearray(CLUTCH_PAYLOAD)
+  for index, scale, value in ((7, 4, engine), (12, 10, shaft1), (14, 10, shaft2), (18, 4, slip1), (20, 4, slip2)):
+    payload[index:index + 2] = (int(round(value * scale)) & 0xFFFF).to_bytes(2, "big")
+  payload[26], payload[27] = gear, next_gear
+  return bytes(payload)
+
+
+def clutch_sample(gear=1, shaft1=0.0, shaft2=0.0, slip1=0.0, slip2=0.0):
+  return {"gear": float(gear), "nextGear": float(gear), "engineRpm": 800.0,
+          "shaft1": shaft1, "shaft2": shaft2, "clutch1Slip": slip1, "clutch2Slip": slip2,
+          "clutch1": 0.0, "clutch2": 0.0}
+
+
+class TestClutchState(unittest.TestCase):
+  """Odd gears run on clutch 1 and even gears on clutch 2, so parity decides which is which."""
+
+  def setUp(self):
+    self.reader = temperature.EngineTemperatureReader(engine_enabled=False, clutch_enabled=True)
+
+  def poll_states(self, payloads, spacing=0.5):
+    readings = []
+    for index, payload in enumerate(payloads):
+      frames = clutch_frames(payload)
+      start = index * spacing
+      self.assertEqual(self.reader.update(start, []), [temperature.CLUTCH_REQUEST])
+      self.assertEqual(self.reader.update(start + 0.01, frames[:1]), [temperature.CLUTCH_FLOW_CONTROL])
+      self.assertEqual(self.reader.update(start + 0.02, frames[1:]), [])
+      readings.append(self.reader.readings(start + 0.02))
+    return readings
+
+  def test_recorded_fixture_decodes_every_field(self):
+    self.assertEqual(temperature.decode_clutch_payload(CLUTCH_PAYLOAD),
+                     {"engineRpm": 679.5, "shaft1": 0.0, "shaft2": 147.2, "clutch1Slip": 679.5,
+                      "clutch2Slip": 532.25, "gear": 1.0, "nextGear": 1.0, "clutch1": 63.0, "clutch2": 35.0})
+    self.assertIsNone(temperature.decode_clutch_payload(CLUTCH_PAYLOAD[:-1]))
+    self.assertIsNone(temperature.decode_clutch_payload(b"\x62\x01\xa5" + CLUTCH_PAYLOAD[3:]))
+
+  def test_signed_fields_wrap_at_their_high_bit(self):
+    values = temperature.decode_clutch_payload(clutch_payload(slip1=-400.0, shaft2=-147.2))
+    self.assertEqual(values["clutch1Slip"], -400.0)
+    self.assertEqual(values["shaft2"], -147.2)
+
+  def test_unmapped_payload_still_yields_temperatures(self):
+    self.assertEqual(temperature.decode_clutch_temperatures(clutch_payload()), (63.0, 35.0))
+
+  def test_no_gear_or_the_invalid_sentinel_is_unknown(self):
+    for gear in (0, 8, 14, 255):
+      sample = clutch_sample(gear=gear, shaft1=700.0, slip1=400.0)
+      self.assertEqual(temperature.classify_clutch(1, sample, temperature.ENGAGED), temperature.UNKNOWN)
+      self.assertEqual(temperature.classify_clutch(2, sample, temperature.SLIPPING), temperature.UNKNOWN)
+
+  def test_standstill_slip_is_an_open_clutch_not_slipping(self):
+    # Recorded at a brake-on stop in 1st: shaft 1 reads zero while slip reads full engine speed.
+    sample = clutch_sample(gear=1, shaft1=0.0, slip1=679.5)
+    self.assertEqual(temperature.classify_clutch(1, sample, temperature.ENGAGED), temperature.DISENGAGED)
+
+  def test_preselected_clutch_speed_difference_is_not_slipping(self):
+    sample = clutch_sample(gear=1, shaft1=700.0, shaft2=147.2, slip1=400.0, slip2=532.25)
+    self.assertEqual(temperature.classify_clutch(2, sample, temperature.ENGAGED), temperature.DISENGAGED)
+    self.assertEqual(temperature.classify_clutch(1, sample, temperature.ENGAGED), temperature.SLIPPING)
+
+  def test_slip_band_holds_the_previous_state(self):
+    self.assertEqual(temperature.classify_clutch(1, clutch_sample(gear=1, shaft1=700.0, slip1=40.0),
+                                                 temperature.DISENGAGED), temperature.ENGAGED)
+    self.assertEqual(temperature.classify_clutch(1, clutch_sample(gear=1, shaft1=700.0, slip1=400.0),
+                                                 temperature.DISENGAGED), temperature.SLIPPING)
+    for previous in (temperature.ENGAGED, temperature.SLIPPING):
+      inside_band = clutch_sample(gear=1, shaft1=700.0, slip1=150.0)  # Between the two thresholds.
+      self.assertEqual(temperature.classify_clutch(1, inside_band, previous), previous)
+
+  def latch_time(self, spacing):
+    tracker = temperature.ClutchStateTracker()
+    slipping = clutch_sample(gear=1, shaft1=700.0, slip1=400.0)
+    for index in range(20):
+      if tracker.update(index * spacing, slipping)[0] == temperature.SLIPPING:
+        return index * spacing
+    raise AssertionError("slipping never latched")
+
+  def test_dwell_measures_time_not_sample_count(self):
+    # The scheduler's rate varies, so a sample-count dwell would latch late at 1 Hz.
+    latched_at = {spacing: self.latch_time(spacing) for spacing in (0.5, 1.0)}
+    self.assertEqual(latched_at[0.5], latched_at[1.0])
+    self.assertGreaterEqual(latched_at[0.5], temperature.SLIP_DWELL_ON)
+    self.assertLess(latched_at[0.5], temperature.SLIP_DWELL_ON + 0.5)
+
+  def test_a_lone_slip_sample_does_not_flicker_the_glyph(self):
+    tracker = temperature.ClutchStateTracker()
+    engaged = clutch_sample(gear=1, shaft1=700.0, slip1=40.0)
+    slipping = clutch_sample(gear=1, shaft1=700.0, slip1=400.0)
+    states = [tracker.update(index * 0.5, sample)[0]
+              for index, sample in enumerate((engaged, slipping, engaged, slipping, engaged))]
+    self.assertEqual(states, [temperature.ENGAGED] * 5)
+
+  def test_sustained_slip_latches_and_holds_after_the_reader(self):
+    engaged = clutch_payload(gear=1, shaft1=700.0, slip1=40.0)
+    slipping = clutch_payload(gear=1, shaft1=700.0, slip1=400.0)
+    states = [readings["clutch1State"] for readings in
+              self.poll_states((engaged, slipping, slipping, slipping, slipping))]
+    # The dwell starts at the first slipping sample, so two half-second polls pass before it latches.
+    self.assertEqual(states, [temperature.ENGAGED, temperature.ENGAGED, temperature.ENGAGED,
+                              temperature.SLIPPING, temperature.SLIPPING])
+
+  def test_slipping_clears_only_once_slip_has_actually_stopped(self):
+    engaged = clutch_payload(gear=1, shaft1=700.0, slip1=40.0)
+    slipping = clutch_payload(gear=1, shaft1=700.0, slip1=400.0)
+    states = [readings["clutch1State"] for readings in
+              self.poll_states((engaged, slipping, slipping, slipping, slipping,
+                                engaged, engaged, engaged, engaged))]
+    self.assertEqual(states, [temperature.ENGAGED, temperature.ENGAGED, temperature.ENGAGED,
+                              temperature.SLIPPING, temperature.SLIPPING, temperature.SLIPPING,
+                              temperature.SLIPPING, temperature.ENGAGED, temperature.ENGAGED])
+
+  def test_the_other_clutch_tracks_the_opposite_parity(self):
+    # 2nd gear: clutch 2 drives, clutch 1 sits preselected with a large speed difference.
+    readings = self.poll_states([clutch_payload(gear=2, next_gear=2, shaft1=600.0, shaft2=700.0,
+                                                slip1=400.0, slip2=40.0)])[0]
+    self.assertEqual((readings["clutch1State"], readings["clutch2State"]),
+                     (temperature.DISENGAGED, temperature.ENGAGED))
+
+  def test_raw_values_and_states_expire_with_their_payload(self):
+    readings = self.poll_states([clutch_payload(gear=1, shaft1=700.0, slip1=40.0)])[0]
+    self.assertEqual(readings["gear"], 1.0)
+    self.assertEqual(readings["engineRpm"], 800.0)
+    self.assertEqual(readings["inputShaft1Rpm"], 700.0)
+    self.assertEqual(readings["clutch1SlipRpm"], 40.0)
+    self.assertEqual(readings["clutch1State"], temperature.ENGAGED)
+    readings = self.reader.readings(0.02 + temperature.STALE_AFTER)
+    self.assertEqual((readings["clutch1State"], readings["clutch2State"]),
+                     (temperature.UNKNOWN, temperature.UNKNOWN))
+    self.assertEqual(readings["gear"] + readings["engineRpm"] + readings["inputShaft1Rpm"], 0.0)
+
+  def test_a_garbled_reply_leaves_the_last_state_in_place(self):
+    self.poll_states([clutch_payload(gear=1, shaft1=700.0, slip1=40.0)])
+    self.assertEqual(self.reader.update(0.5, []), [temperature.CLUTCH_REQUEST])
+    self.assertEqual(self.reader.update(0.52, clutch_frames(CLUTCH_PAYLOAD[:-1])), [])
+    self.assertEqual(self.reader.readings(0.52)["clutch1State"], temperature.ENGAGED)
 
 
 if __name__ == "__main__":

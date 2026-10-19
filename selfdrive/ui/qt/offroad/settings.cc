@@ -118,6 +118,13 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       false,
     },
     {
+      "ClutchStateDisplay",
+      tr("Clutch Engagement Display"),
+      tr("Show one glyph per DCT clutch on the driving screen for the 2018 Elantra GT Sport. An outlined circle is disengaged, a filled circle is engaged, and a half filled circle with an amber outline is slipping. Amber needs about a second of sustained slip, so it marks a half clutch in slow traffic rather than individual shifts. Shares the transmission diagnostic used by the DCT clutch temperature toggle. Takes effect after restarting the car."),
+      "../assets/icons/metric.png",
+      false,
+    },
+    {
       "AlwaysOnDM",
       tr("Always-On Driver Monitoring"),
       tr("Enable driver monitoring even when sunnypilot is not engaged."),

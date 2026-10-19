@@ -170,6 +170,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"EngineTemperatureDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"DctTemperatureDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"BoostDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
+    {"ClutchStateDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
 
     // MADS params
     {"Mads", {PERSISTENT | BACKUP, BOOL, "1"}},

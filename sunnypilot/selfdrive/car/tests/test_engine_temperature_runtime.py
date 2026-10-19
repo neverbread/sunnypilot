@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 import cereal
 from cereal import car, log
+from openpilot.sunnypilot.selfdrive.car.engine_temperature import EngineTemperatureReader
 from openpilot.sunnypilot.selfdrive.car.enginetempd import SUPPORTED_CAR, configure_engine_temperatures, main
 
 
@@ -97,6 +98,29 @@ class TestEngineTemperatureRuntime(unittest.TestCase):
     with log.Event.from_bytes(msg.to_bytes()) as restored:
       self.assertAlmostEqual(restored.engineTemperature.boostKpa, -58.325, places=4)
       self.assertTrue(restored.engineTemperature.boostValid)
+
+  def test_every_published_reading_key_is_assignable(self):
+    # The daemon assigns a flat dict with no try/except, so a key the struct does
+    # not declare would kill it on the road. This cannot drift from readings().
+    readings = EngineTemperatureReader(engine_enabled=True, clutch_enabled=True, boost_enabled=True).readings(0.0)
+    msg = log.Event.new_message(valid=True)
+    msg.init("engineTemperature")
+    msg.engineTemperature = dict(readings, supported=True)
+    for key, value in readings.items():
+      self.assertEqual(getattr(msg.engineTemperature, key), value)
+
+  def test_clutch_states_and_their_raw_values_round_trip(self):
+    msg = log.Event.new_message(valid=True)
+    msg.init("engineTemperature")
+    msg.engineTemperature = {"gear": 3.0, "nextGear": 4.0, "engineRpm": 1873.5, "inputShaft1Rpm": 1873.5,
+                             "inputShaft2Rpm": 612.4, "clutch1SlipRpm": 0.0, "clutch2SlipRpm": -532.25,
+                             "clutch1State": 3.0, "clutch2State": 1.0}
+    with log.Event.from_bytes(msg.to_bytes()) as restored:
+      states = restored.engineTemperature
+      self.assertEqual((states.clutch1State, states.clutch2State), (3.0, 1.0))
+      self.assertEqual((states.gear, states.nextGear), (3.0, 4.0))
+      self.assertAlmostEqual(states.clutch2SlipRpm, -532.25, places=3)
+      self.assertEqual(states.oilCelsius, 0.0)  # Unassigned fields keep their defaults, not garbage.
 
 
 if __name__ == '__main__':
