@@ -18,6 +18,13 @@
 
 namespace {
 constexpr double KPA_TO_PSI = 0.14503773800722;
+constexpr double PSI_TO_KPA = 6.8947572932;
+// A corner this far below the best inflated of the four reads as low. It is a
+// comparison between the car's own tires, not a factory warning threshold.
+constexpr double LOW_TIRE_DELTA_PSI = 3.0;
+// The strip sits over asphalt, so it needs almost no backing of its own. Kept as
+// a named constant because how visible this frame should be is a taste call.
+constexpr int TIRE_CARD_ALPHA = 40;
 // Estimated stock-range display endpoint, not a verified factory limit.
 // N75 describes stock-level boost around 18 psi, occasionally 19 psi:
 // https://n75motorsports.ca/products/ecu-tuning-elantra-sport-gtsport-nline
@@ -38,16 +45,38 @@ void HudRendererSP::updateState(const UIState &s) {
 
   const SubMaster &sm = *s.sm;
   const uint64_t now = nanos_since_boot();
-  const auto fresh_brake_state = [&](const char *service) {
+  const auto fresh_service = [&](const char *service) {
     return sm.alive(service) && sm.valid(service) && sm.rcv_frame(service) > s.scene.started_frame &&
            now - sm.rcv_time(service) <= 500000000ULL;
   };
   // Keep brake status independent of the optional vehicle readings below.
   // The pedal remains available on cars without a reported brake-light signal.
-  const bool braking = s.scene.started && s.scene.braking_status && fresh_brake_state("carState") &&
+  const bool braking = s.scene.started && s.scene.braking_status && fresh_service("carState") &&
                        (sm["carState"].getCarState().getBrakePressed() ||
-                        (fresh_brake_state("carStateSP") && sm["carStateSP"].getCarStateSP().getBrakeLights()));
+                        (fresh_service("carStateSP") && sm["carStateSP"].getCarStateSP().getBrakeLights()));
   current_speed_color = braking ? QColor(255, 0, 0) : QColor(Qt::white);
+
+  // Hide supplementary readings during alerts and while selfdrive is unavailable.
+  const bool selfdrive_ready = sm.alive("selfdriveState") && sm.valid("selfdriveState") &&
+                              sm.rcv_frame("selfdriveState") > s.scene.started_frame &&
+                              now - sm.rcv_time("selfdriveState") <= 3e9;
+  const bool alert_visible = selfdrive_ready &&
+                            sm["selfdriveState"].getSelfdriveState().getAlertSize() != cereal::SelfdriveState::AlertSize::NONE;
+  const bool readings_visible = s.scene.started && selfdrive_ready && !alert_visible;
+
+  // The tire pressures ride on carStateSP, not on the optional diagnostic
+  // service below, so they keep working when every temperature toggle is off.
+  show_tire_pressures = false;
+  tpms_warning = false;
+  if (readings_visible && fresh_service("carStateSP")) {
+    const auto tire_state = sm["carStateSP"].getCarStateSP();
+    const auto reported_pressures = tire_state.getTirePressuresPsi();
+    if (tire_state.getTirePressureValid() && reported_pressures.size() == 4) {
+      for (int i = 0; i < 4; ++i) tire_pressures_psi[i] = reported_pressures[i];
+      tpms_warning = tire_state.getTpmsWarning();
+      show_tire_pressures = s.scene.tire_pressure_display;
+    }
+  }
 
   const bool current_drive = sm.rcv_frame("engineTemperature") > s.scene.started_frame;
   show_engine_temperatures = false;
@@ -58,13 +87,7 @@ void HudRendererSP::updateState(const UIState &s) {
   boost_background = Qt::transparent;
   if (!current_drive) return;
   const auto temperatures = sm["engineTemperature"].getEngineTemperature();
-  // Hide supplementary readings during alerts and while selfdrive is unavailable.
-  const bool selfdrive_ready = sm.alive("selfdriveState") && sm.valid("selfdriveState") &&
-                              sm.rcv_frame("selfdriveState") > s.scene.started_frame &&
-                              now - sm.rcv_time("selfdriveState") <= 3e9;
-  const bool alert_visible = selfdrive_ready &&
-                            sm["selfdriveState"].getSelfdriveState().getAlertSize() != cereal::SelfdriveState::AlertSize::NONE;
-  const bool visible = s.scene.started && current_drive && temperatures.getSupported() && selfdrive_ready && !alert_visible;
+  const bool visible = current_drive && temperatures.getSupported() && readings_visible;
   show_engine_temperatures = s.scene.engine_temperature_display && visible;
   show_dct_temperatures = s.scene.dct_temperature_display && visible;
   show_boost = s.scene.boost_display && visible;
@@ -116,6 +139,7 @@ void HudRendererSP::updateState(const UIState &s) {
 
 void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
   HudRenderer::draw(p, surface_rect);
+  drawTirePressures(p, surface_rect);
   drawVehicleReadings(p, surface_rect);
   drawClutchIndicators(p, surface_rect);
 }
@@ -253,5 +277,48 @@ void HudRendererSP::drawClutchIndicators(QPainter &p, const QRect &surface_rect)
     p.setPen(text);
     p.drawText(circle, Qt::AlignCenter, QString::number(i + 1));
   }
+  p.restore();
+}
+
+void HudRendererSP::drawTirePressures(QPainter &p, const QRect &surface_rect) {
+  if (!show_tire_pressures || surface_rect.width() < 1100) return;
+
+  // Bottom edge of the camera surface, level with the driver monitoring box on
+  // the left. Alerts use this same band, but updateState already hides the
+  // strip while an alert is up, so the two never compete for the space.
+  const int cell_width = 148, unit_width = 60, card_height = 128, card_padding = 18;
+  const int card_width = 4 * cell_width + unit_width + 2 * card_padding;
+  const QRect card((surface_rect.left() + surface_rect.right() + 1 - card_width) / 2,
+                   surface_rect.bottom() + 1 - card_height, card_width, card_height);
+  if (card.left() < surface_rect.left() + UI_BORDER_SIZE) return;  // Split views leave no room.
+
+  float highest_psi = 0.0f;
+  for (const float pressure : tire_pressures_psi) highest_psi = std::max(highest_psi, pressure);
+
+  p.save();
+  p.setPen(Qt::NoPen);
+  p.setBrush(QColor(0, 0, 0, TIRE_CARD_ALPHA));
+  p.drawRoundedRect(card, 24, 24);
+
+  const QColor normal(255, 255, 255, 235);
+  const QColor low(255, 178, 32);  // The same amber the clutch glyphs use.
+  const char *labels[] = {"FL", "FR", "RL", "RR"};
+  for (int i = 0; i < 4; ++i) {
+    const QRect cell(card.x() + card_padding + i * cell_width, card.y(), cell_width, card_height);
+    // The vehicle's own telltale wins: it knows a threshold this comparison cannot.
+    const bool low_corner = tpms_warning || highest_psi - tire_pressures_psi[i] >= LOW_TIRE_DELTA_PSI;
+    p.setFont(InterFont(30, QFont::DemiBold));
+    p.setPen(QColor(255, 255, 255, 150));
+    p.drawText(QRect(cell.x(), cell.y() + 12, cell.width(), 34), Qt::AlignCenter, QString::fromLatin1(labels[i]));
+    const QString value = QString::number(is_metric ? tire_pressures_psi[i] * PSI_TO_KPA : tire_pressures_psi[i], 'f', 0);
+    p.setFont(InterFont(56, QFont::Bold));
+    p.setPen(low_corner ? low : normal);
+    p.drawText(QRect(cell.x(), cell.y() + 46, cell.width(), 66), Qt::AlignCenter, value);
+  }
+
+  p.setFont(InterFont(30, QFont::DemiBold));
+  p.setPen(QColor(255, 255, 255, 150));
+  p.drawText(QRect(card.right() - card_padding - unit_width, card.y() + (card_height - 34) / 2, unit_width, 34),
+             Qt::AlignCenter, is_metric ? QStringLiteral("kPa") : QStringLiteral("psi"));
   p.restore();
 }

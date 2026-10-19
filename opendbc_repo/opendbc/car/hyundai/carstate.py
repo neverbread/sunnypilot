@@ -208,6 +208,7 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       ret.cruiseState.available = self.get_main_cruise(ret)
 
     CarStateExt.update(self, ret, can_parsers, speed_conv)
+    CarStateExt.update_sp_ext(self, ret_sp, can_parsers)
 
     ret.blockPcmEnable = not self.recent_button_interaction()
 
@@ -337,6 +338,11 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       return self.get_can_parsers_canfd(CP)
 
     return {
-      Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 0),
+      # TPMS11 is a body-controller broadcast on this bus, so the tire pressures
+      # need no diagnostic request. Its frequency is unknown here and it is
+      # absent on some vehicles, so it is subscribed with the alive check off:
+      # interfaces.py folds every parser's can_valid into carState.canValid, and
+      # a message that never arrives would fault the car as a CAN error.
+      Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], [("TPMS11", float("nan"))], 0),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2),
     }

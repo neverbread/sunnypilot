@@ -125,6 +125,13 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       false,
     },
     {
+      "TirePressureDisplay",
+      tr("Tire Pressure Display"),
+      tr("Show the four tire pressures your vehicle's own sensors report, along the bottom of the driving screen. Uses kPa with Use Metric System enabled, otherwise psi. Only the vehicle's psi reporting is read, so vehicles without the signal, or with the cluster set to another unit, show nothing. Amber marks a corner at least 3 psi below the highest of the four: a comparison between your own tires, not a factory warning threshold."),
+      "../assets/icons/metric.png",
+      false,
+    },
+    {
       "AlwaysOnDM",
       tr("Always-On Driver Monitoring"),
       tr("Enable driver monitoring even when sunnypilot is not engaged."),

@@ -131,3 +131,6 @@ class CarControlSP:
 @auto_dataclass
 class CarStateSP:
   brakeLights: bool = auto_field()
+  tirePressuresPsi: list[float] = auto_field()
+  tirePressureValid: bool = auto_field()
+  tpmsWarning: bool = auto_field()

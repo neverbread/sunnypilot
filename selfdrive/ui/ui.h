@@ -69,6 +69,7 @@ typedef struct UIScene {
   bool dct_temperature_display = false;
   bool boost_display = false;
   bool clutch_state_display = false;
+  bool tire_pressure_display = false;
   uint64_t started_frame;
 } UIScene;
 

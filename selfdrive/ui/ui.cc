@@ -75,6 +75,7 @@ void ui_update_params(UIState *s) {
   s->scene.dct_temperature_display = params.getBool("DctTemperatureDisplay");
   s->scene.boost_display = params.getBool("BoostDisplay");
   s->scene.clutch_state_display = params.getBool("ClutchStateDisplay");
+  s->scene.tire_pressure_display = params.getBool("TirePressureDisplay");
 }
 
 void UIState::updateStatus() {

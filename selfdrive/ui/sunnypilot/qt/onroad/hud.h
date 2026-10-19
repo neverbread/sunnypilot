@@ -25,10 +25,15 @@ public:
 private:
   void drawVehicleReadings(QPainter &p, const QRect &surface_rect);
   void drawClutchIndicators(QPainter &p, const QRect &surface_rect);
+  void drawTirePressures(QPainter &p, const QRect &surface_rect);
   bool show_engine_temperatures = false;
   bool show_dct_temperatures = false;
   bool show_boost = false;
   bool show_clutch_states = false;
+  bool show_tire_pressures = false;
+  // Front left, front right, rear left, rear right, as the vehicle reports them.
+  float tire_pressures_psi[4] = {};
+  bool tpms_warning = false;
   // 0 unknown / 1 disengaged / 2 engaged / 3 slipping, as engineTemperature publishes them.
   int clutch1_state = 0, clutch2_state = 0;
   uint64_t last_clutch_state_nanos = 0;

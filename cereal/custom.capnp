@@ -252,6 +252,14 @@ struct BackupManagerSP @0xf98d843bfd7004a3 {
 
 struct CarStateSP @0xb86e6369214c01c8 {
   brakeLights @0 :Bool;  # vehicle-reported braking, including stock cruise braking when available
+
+  # Body-controller tire pressures in psi, ordered front left, front right,
+  # rear left, rear right. Only published while the vehicle is reporting them,
+  # so an empty list means the vehicle has no readable signal for this.
+  tirePressuresPsi @1 :List(Float32);
+  tirePressureValid @2 :Bool;
+  # The vehicle's own low-pressure telltale, not a sunnypilot threshold.
+  tpmsWarning @3 :Bool;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {
