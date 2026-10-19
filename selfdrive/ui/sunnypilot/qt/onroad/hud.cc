@@ -188,12 +188,15 @@ void HudRendererSP::drawClutchIndicators(QPainter &p, const QRect &surface_rect)
 
   // Left column, centred between the same anchors the readings card uses, which
   // keeps the glyphs below the set-speed card and clear of the driver face.
-  const int glyph_size = 84, glyph_gap = 28, panel_padding = 20, caption_height = 40;
-  const int panel_height = caption_height + glyph_size + 2 * panel_padding;
+  // Stacked rather than side by side: the column has height to spare and the
+  // glyphs can be much larger without reaching toward the speed numeral.
+  const int glyph_size = 104, glyph_gap = 22, panel_padding = 20, caption_height = 40;
+  const int panel_height = caption_height + 2 * glyph_size + glyph_gap + 2 * panel_padding;
   const int top_anchor = surface_rect.top() + UI_BORDER_SIZE + btn_size + 20;
   const int bottom_anchor = surface_rect.bottom() + 1 - UI_BORDER_SIZE - btn_size;
+  if (panel_height > bottom_anchor - top_anchor) return;  // Short surfaces cannot fit the stack.
   const QRect panel(surface_rect.left() + UI_BORDER_SIZE, (top_anchor + bottom_anchor - panel_height) / 2,
-                    2 * glyph_size + glyph_gap + 2 * panel_padding, panel_height);
+                    glyph_size + 2 * panel_padding, panel_height);
 
   p.save();
   p.setPen(Qt::NoPen);
@@ -207,8 +210,9 @@ void HudRendererSP::drawClutchIndicators(QPainter &p, const QRect &surface_rect)
   const QColor amber(255, 178, 32);
   const int states[2] = {clutch1_state, clutch2_state};
   for (int i = 0; i < 2; ++i) {
-    const QRectF circle(panel.x() + panel_padding + i * (glyph_size + glyph_gap),
-                        panel.y() + panel_padding + caption_height, glyph_size, glyph_size);
+    const QRectF circle(panel.x() + panel_padding,
+                        panel.y() + panel_padding + caption_height + i * (glyph_size + glyph_gap),
+                        glyph_size, glyph_size);
     if (states[i] == CLUTCH_SLIPPING) {
       // Half fill reads as a partly engaged clutch. Clip the fill alone so the
       // amber ring keeps its full circumference.
@@ -223,29 +227,29 @@ void HudRendererSP::drawClutchIndicators(QPainter &p, const QRect &surface_rect)
     }
 
     QColor fill = Qt::transparent, text = QColor(255, 255, 255, 150);
-    QPen pen(QColor(255, 255, 255, 110), 4);
+    QPen pen(QColor(255, 255, 255, 110), 5);
     switch (states[i]) {
       case CLUTCH_ENGAGED:
         fill = QColor(255, 255, 255, 235);
-        pen = QPen(QColor(255, 255, 255, 60), 2);
+        pen = QPen(QColor(255, 255, 255, 60), 3);
         text = QColor(20, 20, 20, 235);
         break;
       case CLUTCH_SLIPPING:
-        pen = QPen(amber, 5);
+        pen = QPen(amber, 6);
         text = QColor(255, 255, 255, 240);
         break;
       case CLUTCH_DISENGAGED:
         break;
       default:
-        pen = QPen(QColor(255, 255, 255, 60), 3, Qt::CustomDashLine);
-        pen.setDashPattern({6, 6});
+        pen = QPen(QColor(255, 255, 255, 60), 4, Qt::CustomDashLine);
+        pen.setDashPattern({7, 7});
         text = QColor(255, 255, 255, 70);
         break;
     }
     p.setBrush(fill);
     p.setPen(pen);
     p.drawEllipse(circle);
-    p.setFont(InterFont(38, QFont::Bold));
+    p.setFont(InterFont(46, QFont::Bold));
     p.setPen(text);
     p.drawText(circle, Qt::AlignCenter, QString::number(i + 1));
   }
