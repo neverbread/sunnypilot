@@ -649,10 +649,19 @@ class TestClutchState(unittest.TestCase):
     self.assertIsNone(temperature.decode_clutch_payload(CLUTCH_PAYLOAD[:-1]))
     self.assertIsNone(temperature.decode_clutch_payload(b"\x62\x01\xa5" + CLUTCH_PAYLOAD[3:]))
 
-  def test_signed_fields_wrap_at_their_high_bit(self):
-    values = temperature.decode_clutch_payload(clutch_payload(slip1=-400.0, shaft2=-147.2))
+  def test_slip_wraps_at_its_high_bit_and_shaft_speed_does_not(self):
+    # Slip is signed, so it wraps. Shaft speed is not: the recorded profile reaches
+    # 6550 rpm there, and its own slip = engine - shaft identity only closes unsigned.
+    values = temperature.decode_clutch_payload(clutch_payload(slip1=-400.0, shaft2=6549.8))
     self.assertEqual(values["clutch1Slip"], -400.0)
-    self.assertEqual(values["shaft2"], -147.2)
+    self.assertEqual(values["shaft2"], 6549.8)
+
+  def test_fast_input_shaft_keeps_a_driving_clutch_engaged(self):
+    # 3400 rpm sets the shaft word's high bit. Read signed it becomes -3153 rpm and
+    # falls through the standstill gate, so a driving clutch would render disengaged.
+    sample = temperature.decode_clutch_payload(clutch_payload(gear=3, engine=3400.0, shaft1=3400.0))
+    self.assertEqual(sample["shaft1"], 3400.0)
+    self.assertEqual(temperature.classify_clutch(1, sample, temperature.ENGAGED), temperature.ENGAGED)
 
   def test_unmapped_payload_still_yields_temperatures(self):
     self.assertEqual(temperature.decode_clutch_temperatures(clutch_payload()), (63.0, 35.0))

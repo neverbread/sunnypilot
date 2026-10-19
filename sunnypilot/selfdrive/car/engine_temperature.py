@@ -90,19 +90,26 @@ def _signed_word(payload: bytes, index: int) -> float:
   return value - 65536 if value & 0x8000 else float(value)
 
 
+def _unsigned_word(payload: bytes, index: int) -> float:
+  return float(int.from_bytes(payload[index:index + 2], "big"))
+
+
 def decode_clutch_payload(payload: bytes) -> dict[str, float] | None:
   """Every mapped field of the recorded TCM reply, in one 49-byte response.
 
   Byte 7 is engine speed and bytes 18/20 are the two clutch slip speeds; slip is
-  signed, and equals engine speed minus that clutch's input shaft speed.
+  signed, and equals engine speed minus that clutch's input shaft speed. The
+  shaft speeds at bytes 12/14 are unsigned: they top out near 6550 rpm, well
+  past the redline, and the recorded profile's own slip = engine - shaft
+  identity only closes when they are read unsigned.
   """
   if len(payload) != CLUTCH_RESPONSE_LENGTH or payload[:3] != b"\x62\x01\xa4":
     return None
   gear, next_gear = payload[26], payload[27]
   return {
     "engineRpm": _signed_word(payload, 7) / 4,
-    "shaft1": _signed_word(payload, 12) / 10,
-    "shaft2": _signed_word(payload, 14) / 10,
+    "shaft1": _unsigned_word(payload, 12) / 10,
+    "shaft2": _unsigned_word(payload, 14) / 10,
     "clutch1Slip": _signed_word(payload, 18) / 4,
     "clutch2Slip": _signed_word(payload, 20) / 4,
     "gear": float(gear),
