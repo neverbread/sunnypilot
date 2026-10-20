@@ -48,6 +48,17 @@ struct LeadData {
 
 struct SelfdriveStateSP @0x81c2f05a394cf4af {
   mads @0 :ModularAssistiveDrivingSystem;
+
+  # What the "Traffic May Be Ready to Move" reminder currently sees, published so the UI can
+  # draw the lead the reminder is reasoning about instead of re-deriving its thresholds.
+  leadDepartState @1 :LeadDepartState;
+
+  enum LeadDepartState {
+    none @0;       # no lead tracked: nothing ahead, or this stop already got its reminder
+    acquiring @1;  # a plausible lead is tracked, but the arm conditions are not met yet
+    armed @2;      # the reminder's own conditions are met; a departure would fire it
+    departing @3;  # the tracked lead's departure is confirmed; published for one frame
+  }
 }
 
 struct ModelManagerSP @0xaedffd8f31e7b55d {

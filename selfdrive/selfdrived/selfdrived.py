@@ -556,6 +556,8 @@ class SelfdriveD(CruiseHelper):
     mads.enabled = self.mads.enabled
     mads.active = self.mads.active
     mads.available = self.mads.enabled_toggle
+    # The reminder ran earlier in this same step, so this describes the lead it just evaluated.
+    ss_sp.leadDepartState = self.driver_notifications.lead_box_state
 
     self.pm.send('selfdriveStateSP', ss_sp_msg)
 

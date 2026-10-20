@@ -1,7 +1,9 @@
 import unittest
 from types import SimpleNamespace
 
-from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
+from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import (
+  E2EAlertsHelper, LEAD_BOX_ACQUIRING, LEAD_BOX_ARMED, LEAD_BOX_DEPARTING, LEAD_BOX_NONE
+)
 
 
 class TestE2EAlertsHelper(unittest.TestCase):
@@ -117,6 +119,87 @@ class TestE2EAlertsHelper(unittest.TestCase):
           self.lead.modelProb = 0.4
         self.wait_at_stop(**kwargs)
         self.assertFalse(any(self.depart(**kwargs)))
+
+  def test_lead_box_none_without_a_lead(self):
+    self.lead.status = False
+    for _ in range(60):
+      self.assertFalse(self.update())
+      self.assertEqual(self.helper.lead_box_state, LEAD_BOX_NONE)
+
+  def test_lead_box_acquires_before_it_arms(self):
+    states = []
+    for _ in range(60):
+      self.assertFalse(self.update())
+      states.append(self.helper.lead_box_state)
+    self.assertIn(LEAD_BOX_ARMED, states)
+    armed = states.index(LEAD_BOX_ARMED)
+    self.assertGreater(armed, 20)
+    self.assertEqual(states[0], LEAD_BOX_ACQUIRING)
+    self.assertEqual(set(states[:armed]), {LEAD_BOX_ACQUIRING})
+    self.assertEqual(set(states[armed:]), {LEAD_BOX_ARMED})
+
+  def test_lead_box_none_when_the_lead_reminder_is_disabled(self):
+    self.wait_at_stop(lead_enabled=False)
+    self.assertEqual(self.helper.lead_box_state, LEAD_BOX_NONE)
+
+  def test_lead_box_departing_only_on_the_chime_frame(self):
+    self.wait_at_stop()
+    self.assertEqual(self.helper.lead_box_state, LEAD_BOX_ARMED)
+    self.lead.vRel = 1.5
+    alerts, states = [], []
+    for _ in range(40):
+      self.lead.dRel += 0.075
+      alerts.append(self.update())
+      states.append(self.helper.lead_box_state)
+    self.assertEqual(states.count(LEAD_BOX_DEPARTING), 1)
+    self.assertEqual(states[alerts.index(True)], LEAD_BOX_DEPARTING)
+    self.assertEqual(set(states[states.index(LEAD_BOX_DEPARTING) + 1:]), {LEAD_BOX_NONE})
+
+  def test_lead_box_stays_none_after_departing_until_the_car_moves(self):
+    self.wait_at_stop()
+    self.assertEqual(sum(self.depart()), 1)
+    for _ in range(60):
+      self.assertFalse(self.update())
+      self.assertEqual(self.helper.lead_box_state, LEAD_BOX_NONE)
+    self.CS.standstill, self.CS.vEgo = False, 2.0
+    self.assertFalse(self.update())
+    self.assertEqual(self.helper.lead_box_state, LEAD_BOX_NONE)
+    self.CS.standstill, self.CS.vEgo = True, 0.0
+    self.lead.dRel, self.lead.vRel = 6.0, 0.0
+    self.wait_at_stop()
+    self.assertEqual(self.helper.lead_box_state, LEAD_BOX_ARMED)
+
+  def test_lead_box_holds_between_radar_frames(self):
+    self.wait_at_stop()
+    self.assertEqual(self.helper.lead_box_state, LEAD_BOX_ARMED)
+    frozen = self.now
+    for _ in range(4):
+      self.assertFalse(self.update(model_time=frozen, radar_time=frozen))
+      self.assertEqual(self.helper.lead_box_state, LEAD_BOX_ARMED)
+
+  def test_lead_box_clears_on_gas_or_ego_movement(self):
+    for attribute, value in (('gasPressed', True), ('vEgo', 0.5), ('standstill', False)):
+      with self.subTest(attribute=attribute, value=value):
+        self.setUp()
+        self.wait_at_stop()
+        self.assertEqual(self.helper.lead_box_state, LEAD_BOX_ARMED)
+        setattr(self.CS, attribute, value)
+        self.assertFalse(self.update())
+        self.assertEqual(self.helper.lead_box_state, LEAD_BOX_NONE)
+
+  def test_lead_box_reacquires_after_an_implausible_range_jump(self):
+    self.lead.radar, self.lead.radarTrackId = False, -1
+    self.wait_at_stop()
+    self.assertEqual(self.helper.lead_box_state, LEAD_BOX_ARMED)
+    self.lead.dRel += 5.0
+    states = []
+    for _ in range(40):
+      self.assertFalse(self.update())
+      states.append(self.helper.lead_box_state)
+    self.assertEqual(states[0], LEAD_BOX_ACQUIRING)
+    self.assertNotIn(LEAD_BOX_ARMED, states[:20])
+    self.assertEqual(states[-1], LEAD_BOX_ARMED)
+    self.assertEqual(set(states[states.index(LEAD_BOX_ARMED):]), {LEAD_BOX_ARMED})
 
   def test_green_light_requires_stopped_to_go_model_transition(self):
     self.lead.status = False

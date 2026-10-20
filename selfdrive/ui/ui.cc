@@ -76,6 +76,7 @@ void ui_update_params(UIState *s) {
   s->scene.boost_display = params.getBool("BoostDisplay");
   s->scene.clutch_state_display = params.getBool("ClutchStateDisplay");
   s->scene.tire_pressure_display = params.getBool("TirePressureDisplay");
+  s->scene.lead_tracking_box = params.getBool("LeadTrackingBox");
 }
 
 void UIState::updateStatus() {

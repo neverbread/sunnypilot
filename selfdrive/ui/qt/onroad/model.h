@@ -41,6 +41,10 @@ protected:
                              int height, int width,
                              const QString &label);
   void drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const QPointF &vd, const QRect &surface_rect);
+  // sunnypilot draws the lead the departure reminder is watching; empty in stock builds, which
+  // have no such reminder and no toggle for it.
+  virtual void drawLeadTrackingBox(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_one,
+                                   const cereal::XYZTData::Reader &position, const QRect &surface_rect) {}
   void update_leads(const cereal::RadarState::Reader &radar_state, const cereal::XYZTData::Reader &line);
   virtual void update_model(const cereal::ModelDataV2::Reader &model, const cereal::RadarState::LeadData::Reader &lead);
   void drawLaneLines(QPainter &painter);

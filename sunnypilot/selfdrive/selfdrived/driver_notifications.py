@@ -8,7 +8,10 @@ from openpilot.sunnypilot.selfdrive.controls.lib.steering_speed_alert import Ste
 
 
 EventNameSP = custom.OnroadEventSP.EventName
+LeadDepartState = custom.SelfdriveStateSP.LeadDepartState
 GearShifter = car.CarState.GearShifter
+# Indexes the helper's LEAD_BOX_* codes into the message's enum; the two lists must stay in step.
+LEAD_BOX_STATES = (LeadDepartState.none, LeadDepartState.acquiring, LeadDepartState.armed, LeadDepartState.departing)
 FORWARD_GEARS = (GearShifter.drive, GearShifter.sport, GearShifter.low, GearShifter.manumatic)
 
 
@@ -23,6 +26,15 @@ class DriverNotifications:
     self.speed_enabled = self.params.get_bool("SteeringSpeedChime")
     self.lead_enabled = self.params.get_bool("LeadDepartAlert")
     self.green_light_enabled = self.params.get_bool("GreenLightAlert")
+
+  @property
+  def lead_box_state(self):
+    """How far the reminder's lead tracker has got, as the message's own enum.
+
+    Display-only: the overlay draws what the reminder decided, so the box and the chime can
+    never disagree about which lead they are watching.
+    """
+    return LEAD_BOX_STATES[self.e2e_alerts.lead_box_state]
 
   def update(self, CS, sm, *, allowed: bool, selfdrive_enabled: bool, mads_enabled: bool, car_state_fresh: bool) -> list[int]:
     events = []

@@ -19,6 +19,8 @@ private:
   void updatePathState(const UIState &s);
   void update_model(const cereal::ModelDataV2::Reader &model, const cereal::RadarState::LeadData::Reader &lead) override;
   void drawPath(QPainter &painter, const cereal::ModelDataV2::Reader &model, const QRect &rect) override;
+  void drawLeadTrackingBox(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_one,
+                           const cereal::XYZTData::Reader &position, const QRect &surface_rect) override;
   void mapLaneToPolygon(const cereal::XYZTData::Reader &left_line, const cereal::XYZTData::Reader &right_line,
                         QPolygonF *vertices, int max_idx);
 
@@ -28,4 +30,7 @@ private:
   bool lateral_active = false;
   std::optional<uint64_t> path_started_frame;
   FirstOrderFilter path_width_filter{0.4f, 0.1f, 1.0f / UI_FREQ};
+  // When the departure reminder last confirmed its lead pulling away, so the box can hold its
+  // green frame for a moment. Self-expiring, so it carries nothing between stops.
+  uint64_t lead_depart_nanos = 0;
 };

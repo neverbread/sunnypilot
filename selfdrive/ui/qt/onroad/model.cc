@@ -24,6 +24,10 @@ void ModelRenderer::draw(QPainter &painter, const QRect &surface_rect) {
   drawLaneLines(painter);
   drawPath(painter, model, surface_rect);
 
+  // Deliberately outside the longitudinal_control gate below: the departure reminder tracks the
+  // model's lead on stock-cruise cars too, where no chevron is ever drawn.
+  drawLeadTrackingBox(painter, lead_one, model.getPosition(), surface_rect);
+
   if (longitudinal_control && sm.alive("radarState")) {
     update_leads(radar_state, model.getPosition());
     const auto &lead_two = radar_state.getLeadTwo();

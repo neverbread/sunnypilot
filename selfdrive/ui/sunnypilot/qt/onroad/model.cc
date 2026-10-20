@@ -169,3 +169,106 @@ void ModelRendererSP::drawPath(QPainter &painter, const cereal::ModelDataV2::Rea
     painter.drawPolygon(track_vertices);
   }
 }
+
+namespace {
+// LeadData carries no vehicle dimensions, so these describe a typical compact car rather than
+// measuring one, which is what makes the outline land on the lead instead of being guessed at.
+constexpr float LEAD_BOX_WIDTH = 1.8f;
+constexpr float LEAD_BOX_HEIGHT = 1.5f;
+// The reminder publishes its departure on a single frame; hold the box a moment longer.
+constexpr uint64_t LEAD_BOX_DEPART_NANOS = 800000000ULL;
+constexpr uint64_t LEAD_BOX_MAX_DATA_AGE_NANOS = 3000000000ULL;
+constexpr float LEAD_BOX_PEN_WIDTH = 3.0f;
+}  // namespace
+
+void ModelRendererSP::drawLeadTrackingBox(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_one,
+                                          const cereal::XYZTData::Reader &position, const QRect &surface_rect) {
+  using LeadDepartState = cereal::SelfdriveStateSP::LeadDepartState;
+  auto *s = uiState();
+  const auto &sm = *s->sm;
+  const uint64_t now = nanos_since_boot();
+
+  // The box is only ever a view of the reminder's tracker, so with nothing fresh to read there
+  // is nothing to draw, and no fade to carry over into the next stop. The tracker's message keeps
+  // arriving for a while after radard stalls, and the box is projected from radarState rather than
+  // from that message, so require both.
+  const bool tracker_fresh = s->scene.started && sm.alive("selfdriveStateSP") && sm.valid("selfdriveStateSP") &&
+                             sm.rcv_frame("selfdriveStateSP") > s->scene.started_frame &&
+                             now - sm.rcv_time("selfdriveStateSP") <= LEAD_BOX_MAX_DATA_AGE_NANOS &&
+                             sm.alive("radarState") && sm.valid("radarState");
+  if (!s->scene.lead_tracking_box || !tracker_fresh) {
+    lead_depart_nanos = 0;
+    return;
+  }
+
+  const auto state = sm["selfdriveStateSP"].getSelfdriveStateSP().getLeadDepartState();
+  const bool tracking = state == LeadDepartState::ACQUIRING || state == LeadDepartState::ARMED;
+  if (state == LeadDepartState::DEPARTING) {
+    lead_depart_nanos = now;
+  } else if (tracking) {
+    lead_depart_nanos = 0;
+  }
+  const bool departing = lead_depart_nanos != 0 && now - lead_depart_nanos <= LEAD_BOX_DEPART_NANOS;
+  if (!tracking && !departing) {
+    return;
+  }
+
+  const float d_rel = lead_one.getDRel();
+  const int line_len = std::min(int(position.getX().size()), int(position.getZ().size()));
+  // A dropped lead would leave a departure fade drawing around a stale range, and the reminder
+  // only ever tracks leads whose status is set.
+  if (!lead_one.getStatus() || !std::isfinite(d_rel) || d_rel <= 0.0f || line_len == 0) {
+    return;
+  }
+  // Same ground height the chevron uses, so the box sits where the lead does.
+  const int z_idx = std::min(get_path_length_idx(position, d_rel), line_len - 1);
+  const float ground_z = position.getZ()[z_idx] + path_offset_z;
+  // car_space_transform consumes the device frame: x forward, y right, z down (camera.py's
+  // view_frame_from_device_frame). yRel is positive to the LEFT, so negate it exactly as
+  // update_leads does. Some Hyundai SCC cars report no lateral offset at all, and the reminder
+  // does not look at yRel, so guard it here instead.
+  const float y_rel = std::isfinite(lead_one.getYRel()) ? -lead_one.getYRel() : 0.0f;
+  // z grows downward, so the top of the outline is at a smaller z than the road.
+  const float top_z = ground_z - LEAD_BOX_HEIGHT;
+
+  // An upright outline standing at the lead's own range, sized like a compact car. Projecting it
+  // rather than sizing it in image space is what keeps it the right size at every distance.
+  QPointF corners[4];
+  bool visible[4] = {};
+  auto project = [&](int i, float y, float z) {
+    const Eigen::Vector3f projected = car_space_transform * Eigen::Vector3f(d_rel, y, z);
+    if (!projected.allFinite() || projected.z() <= 1e-3f) return;
+    corners[i] = QPointF(projected.x() / projected.z(), projected.y() / projected.z());
+    visible[i] = true;
+  };
+  const float half_width = LEAD_BOX_WIDTH / 2.0f;
+  project(0, y_rel - half_width, ground_z);
+  project(1, y_rel + half_width, ground_z);
+  project(2, y_rel + half_width, top_z);
+  project(3, y_rel - half_width, top_z);
+
+  QColor color;
+  if (departing) {
+    const float remaining = 1.0f - float(now - lead_depart_nanos) / float(LEAD_BOX_DEPART_NANOS);
+    color = QColor(144, 238, 168, int(255 * remaining));
+  } else if (state == LeadDepartState::ARMED) {
+    color = QColor(255, 165, 0, 230);
+  } else {
+    color = QColor(255, 255, 255, 150);
+  }
+  QPen pen(color, LEAD_BOX_PEN_WIDTH);
+  pen.setCapStyle(Qt::RoundCap);
+  pen.setJoinStyle(Qt::RoundJoin);
+
+  painter.save();
+  painter.setClipRect(surface_rect);
+  painter.setPen(pen);
+  painter.setBrush(Qt::NoBrush);
+  static constexpr int EDGES[4][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0}};
+  for (const auto &[from, to] : EDGES) {
+    if (visible[from] && visible[to]) {
+      painter.drawLine(corners[from], corners[to]);
+    }
+  }
+  painter.restore();
+}

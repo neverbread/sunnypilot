@@ -9,6 +9,10 @@ LEAD_DEPART_DISTANCE = 1.0
 GREEN_LIGHT_STOP_DISTANCE = 10.0
 GREEN_LIGHT_GO_DISTANCE = 30.0
 
+# Display-only view of the lead tracker, mirroring cereal's SelfdriveStateSP.LeadDepartState.
+# Kept as plain numbers so this module stays free of cereal; DriverNotifications maps them.
+LEAD_BOX_NONE, LEAD_BOX_ACQUIRING, LEAD_BOX_ARMED, LEAD_BOX_DEPARTING = 0, 1, 2, 3
+
 
 class E2EAlertsHelper:
   """One reminder per stop, based on a departing lead or the model's stop-to-go prediction.
@@ -20,6 +24,7 @@ class E2EAlertsHelper:
   def __init__(self):
     self.green_light_alert = False
     self.lead_depart_alert = False
+    self.lead_box_state = LEAD_BOX_NONE
     self._last_time = None
     self._alerted = False
     self._saw_lead = False
@@ -85,6 +90,21 @@ class E2EAlertsHelper:
     self._lead_depart_since = None
     return False
 
+  def _lead_box_display(self):
+    """How far the lead tracker has got, for the overlay that draws the lead it watches.
+
+    Reads the tracker's own state rather than recomputing anything, so the box cannot drift
+    out of step with the chime. DEPARTING is published on the one frame the departure confirms;
+    the next frame's _alerted latch clears the tracker, and the overlay holds its own fade.
+    """
+    if self.lead_depart_alert:
+      return LEAD_BOX_DEPARTING
+    if self._lead_armed:
+      return LEAD_BOX_ARMED
+    if self._lead_identity is not None:
+      return LEAD_BOX_ACQUIRING
+    return LEAD_BOX_NONE
+
   def _update_green_light(self, model_x, timestamp, stopped_long_enough):
     if len(model_x) != 33 or not all(math.isfinite(x) for x in model_x) or model_x[-1] < 0:
       self._clear_green_light()
@@ -113,6 +133,8 @@ class E2EAlertsHelper:
              lead_enabled, green_light_enabled, allowed=True):
     self.green_light_alert = False
     self.lead_depart_alert = False
+    # Every early return below leaves the overlay with nothing to draw.
+    self.lead_box_state = LEAD_BOX_NONE
 
     if not math.isfinite(now) or (self._last_time is not None and now < self._last_time):
       self._clear_tracking()
@@ -150,6 +172,9 @@ class E2EAlertsHelper:
       self._clear_lead()
     elif radar_time != self._last_radar_time:
       self.lead_depart_alert = self._update_lead(lead, radar_time, stopped_long_enough)
+    # Derived on every selfdrived frame, not only on new radar frames: the tracker's state
+    # persists between them, and the overlay is republished at selfdriveStateSP's rate.
+    self.lead_box_state = self._lead_box_display()
 
     if not green_light_enabled or self._saw_lead:
       self._clear_green_light()
