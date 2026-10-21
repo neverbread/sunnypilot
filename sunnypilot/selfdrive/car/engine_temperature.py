@@ -45,8 +45,13 @@ UNKNOWN, DISENGAGED, ENGAGED, SLIPPING = 0, 1, 2, 3
 # near-zero slip while the preselected one always reads 300-700 rpm of shaft
 # speed difference, so parity against current gear decides which is which.
 STANDSTILL_SHAFT_RPM = 60.0  # A stopped shaft means the clutch is open, whatever slip reads.
-SLIP_RPM = 200.0
-SLIP_RELEASE_RPM = 100.0  # Hysteresis band between the two holds the previous state.
+# Split on what the box reports while its clutch is doing each thing, from 3287 scan-tool
+# samples taken while the gear parity said that clutch was the driving one: with the input shaft
+# above 1200 rpm slip reads a median of 5 rpm and a p90 of 136, whereas creeping at low shaft
+# speed it modulates at a median of 155 rpm with a p90 of 599. Both thresholds sit either side
+# of the clamped band, so ordinary creep no longer reads as slipping.
+SLIP_RPM = 300.0
+SLIP_RELEASE_RPM = 140.0  # Hysteresis band between the two holds the previous state.
 SLIP_DWELL_ON = 0.8  # Recorded slip excursions run ~1.1 s median; longer would drop half.
 SLIP_DWELL_OFF = 1.0
 GEAR_MIN, GEAR_MAX = 1, 7  # Seven-speed box. Recorded raw values are 0 (no gear) and 14 (invalid).
@@ -156,10 +161,14 @@ class ClutchStateTracker:
   def update(self, now: float, sample: dict[str, float]) -> tuple[int, int]:
     for index, clutch in enumerate((1, 2)):
       candidate = classify_clutch(clutch, sample, self._states[index])
+      # A returned SLIPPING is not evidence on its own: inside the dead band classify holds the
+      # previous state, and a creeping clutch sits there indefinitely. Only a reading at or above
+      # the enter threshold renews the slip dwell.
+      slipping_now = candidate == SLIPPING and abs(sample[f"clutch{clutch}Slip"]) >= SLIP_RPM
       if candidate == UNKNOWN:
         self._states[index] = UNKNOWN
         self._slip_since[index] = self._clear_since[index] = None
-      elif candidate == SLIPPING:
+      elif slipping_now:
         self._clear_since[index] = None
         if self._slip_since[index] is None:
           self._slip_since[index] = now
@@ -167,11 +176,15 @@ class ClutchStateTracker:
           self._states[index] = SLIPPING
           self._slip_since[index] = None
       elif self._states[index] == SLIPPING:
+        # Below the enter threshold for the whole release dwell is the evidence that slipping
+        # ended, so the dwell lands on engaged even when the reading never dropped as far as the
+        # release threshold. Landing back on the held state instead is what left the glyph on
+        # for as long as the car crept in a gear.
         if self._clear_since[index] is None:
           self._clear_since[index] = now
         if now - self._clear_since[index] >= SLIP_DWELL_OFF:
-          self._states[index], self._slip_since[index] = candidate, None
-          self._clear_since[index] = None
+          self._states[index] = ENGAGED if candidate == SLIPPING else candidate
+          self._slip_since[index] = self._clear_since[index] = None
       else:
         self._states[index] = candidate
         self._slip_since[index] = self._clear_since[index] = None

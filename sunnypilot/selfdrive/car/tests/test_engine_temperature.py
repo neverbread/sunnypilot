@@ -733,6 +733,33 @@ class TestClutchState(unittest.TestCase):
                               temperature.SLIPPING, temperature.SLIPPING, temperature.SLIPPING,
                               temperature.SLIPPING, temperature.ENGAGED, temperature.ENGAGED])
 
+  def test_recorded_clamped_and_creep_bands_classify_apart(self):
+    # 5 and 136 rpm are the recorded median and p90 of slip on the driving clutch while it is
+    # clamped at speed, and 155 is the recorded median while creeping: none of them is slipping.
+    # The recorded creep p90 of 599 is, which is what the glyph is for.
+    for slip, expected in ((5.0, temperature.ENGAGED), (136.0, temperature.ENGAGED),
+                           (155.0, temperature.ENGAGED), (250.0, temperature.ENGAGED),
+                           (599.0, temperature.SLIPPING)):
+      with self.subTest(slip=slip):
+        sample = clutch_sample(gear=2, shaft2=2000.0, slip2=slip)
+        self.assertEqual(temperature.classify_clutch(2, sample, temperature.ENGAGED), expected)
+    # The recorded clamped p90 is inside the release threshold, so it settles engaged rather than
+    # holding whatever state it was handed.
+    self.assertEqual(temperature.classify_clutch(2, clutch_sample(gear=2, shaft2=2000.0, slip2=136.0),
+                                                 temperature.DISENGAGED), temperature.ENGAGED)
+
+  def test_creep_between_the_thresholds_does_not_hold_the_glyph_on(self):
+    # Creeping in a driving gear runs 150-600 rpm of reported slip, which sits above the release
+    # threshold and below the enter one for as long as the queue keeps moving. A held slipping
+    # state has to expire regardless, or the glyph stays lit for the whole crawl.
+    latched = clutch_payload(gear=2, shaft2=700.0, slip2=400.0)
+    creeping = clutch_payload(gear=2, shaft2=700.0, slip2=155.0)
+    states = [readings["clutch2State"] for readings in
+              self.poll_states((latched, latched, latched, creeping, creeping, creeping,
+                                creeping, creeping))]
+    self.assertIn(temperature.SLIPPING, states)
+    self.assertEqual(states[-1], temperature.ENGAGED)
+
   def test_the_other_clutch_tracks_the_opposite_parity(self):
     # 2nd gear: clutch 2 drives, clutch 1 sits preselected with a large speed difference.
     readings = self.poll_states([clutch_payload(gear=2, next_gear=2, shaft1=600.0, shaft2=700.0,
