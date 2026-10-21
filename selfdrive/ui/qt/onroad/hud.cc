@@ -56,11 +56,15 @@ void HudRenderer::draw(QPainter &p, const QRect &surface_rect) {
   p.restore();
 }
 
-void HudRenderer::drawSetSpeed(QPainter &p, const QRect &surface_rect) {
-  // Draw outer box + border to contain set speed
+QRect HudRenderer::setSpeedRect() const {
   const QSize default_size = {172, 204};
   QSize set_speed_size = is_metric ? QSize(200, 204) : default_size;
-  QRect set_speed_rect(QPoint(60 + (default_size.width() - set_speed_size.width()) / 2, 45), set_speed_size);
+  return QRect(QPoint(60 + (default_size.width() - set_speed_size.width()) / 2, 45), set_speed_size);
+}
+
+void HudRenderer::drawSetSpeed(QPainter &p, const QRect &surface_rect) {
+  // Draw outer box + border to contain set speed
+  QRect set_speed_rect = setSpeedRect();
 
   // Draw set speed box
   p.setPen(QPen(QColor(255, 255, 255, 75), 6));

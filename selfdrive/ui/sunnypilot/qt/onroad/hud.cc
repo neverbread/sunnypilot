@@ -31,6 +31,19 @@ constexpr int TIRE_CARD_ALPHA = 40;
 constexpr double BOOST_FULL_RED_PSI = 19.0;
 constexpr double VACUUM_FULL_BLUE_KPA = 101.325;  // Sea-level full vacuum, about -14.7 psi gauge.
 
+// The gear badge hangs off the top-right corner of the set-speed card, deliberately the
+// smaller of the two so it reads as a footnote to MAX rather than a second speed.
+constexpr int GEAR_CARD_WIDTH = 130, GEAR_CARD_HEIGHT = 156, GEAR_CARD_GAP = 16, GEAR_CARD_RADIUS = 32;
+constexpr int GEAR_CAPTION_PX = 34, GEAR_VALUE_PX = 72;
+constexpr int GEAR_CAPTION_OFFSET = 20, GEAR_VALUE_OFFSET = 58;
+// engineTemperature publishes the gear as its raw value: 0 means no gear is engaged and 14 is
+// the invalid sentinel, so anything outside a real seven-speed box is treated as no reading.
+constexpr int GEAR_MIN = 1, GEAR_MAX = 7;
+// The split camera view halves the screen, and a 176 px speed numeral centred on that half
+// reaches back to within about 15 px of this card's right border, so the pair needs the wider
+// guard the tire strip uses rather than the one the other readings accept.
+constexpr int GEAR_MIN_SURFACE_WIDTH = 1100;
+
 // engineTemperature publishes the clutch states as plain numbers, not an enum.
 constexpr int CLUTCH_UNKNOWN = 0, CLUTCH_DISENGAGED = 1, CLUTCH_ENGAGED = 2, CLUTCH_SLIPPING = 3;
 // The reader already holds the last decoded pair for five seconds. Holding it
@@ -83,6 +96,8 @@ void HudRendererSP::updateState(const UIState &s) {
   show_dct_temperatures = false;
   show_boost = false;
   show_clutch_states = false;
+  show_gear = false;
+  gear_text.clear();
   oil_background = Qt::transparent;
   boost_background = Qt::transparent;
   if (!current_drive) return;
@@ -135,13 +150,48 @@ void HudRendererSP::updateState(const UIState &s) {
   } else if (now - last_clutch_state_nanos > CLUTCH_HOLD_NANOS) {
     clutch1_state = clutch2_state = CLUTCH_UNKNOWN;
   }
+  // The gear rides in the same TCM reply as the clutch readings, and the GearDisplay toggle keeps
+  // enginetempd polling that reply on its own, so the badge does not depend on the DCT toggles.
+  // It is not hidden by an alert the way the diagnostic strip is: it belongs to the set-speed card
+  // it is attached to, and that card stays up.
+  if (fresh && s.scene.gear_display) {
+    const float reported_gear = temperatures.getGear();
+    if (std::isfinite(reported_gear)) {
+      const int gear = static_cast<int>(std::lround(reported_gear));
+      if (GEAR_MIN <= gear && gear <= GEAR_MAX) {
+        gear_text = QString::number(gear);
+        show_gear = true;
+      }
+    }
+  }
 }
 
 void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
   HudRenderer::draw(p, surface_rect);
+  drawGearIndicator(p, surface_rect);
   drawTirePressures(p, surface_rect);
   drawVehicleReadings(p, surface_rect);
   drawClutchIndicators(p, surface_rect);
+}
+
+void HudRendererSP::drawGearIndicator(QPainter &p, const QRect &surface_rect) {
+  // Attached to the set-speed card, so with that card absent there is nothing to attach to.
+  if (!show_gear || !is_cruise_available || surface_rect.width() < GEAR_MIN_SURFACE_WIDTH) return;
+  const QRect max_card = setSpeedRect();
+  const QRect card(max_card.right() + 1 + GEAR_CARD_GAP, max_card.top(), GEAR_CARD_WIDTH, GEAR_CARD_HEIGHT);
+
+  // Same frame and backing as the set-speed card, so the pair reads as one instrument.
+  p.setPen(QPen(QColor(255, 255, 255, 75), 6));
+  p.setBrush(QColor(0, 0, 0, 166));
+  p.drawRoundedRect(card, GEAR_CARD_RADIUS, GEAR_CARD_RADIUS);
+
+  p.setFont(InterFont(GEAR_CAPTION_PX, QFont::DemiBold));
+  p.setPen(QColor(0xa6, 0xa6, 0xa6, 0xff));
+  p.drawText(card.adjusted(0, GEAR_CAPTION_OFFSET, 0, 0), Qt::AlignTop | Qt::AlignHCenter, tr("GEAR"));
+
+  p.setFont(InterFont(GEAR_VALUE_PX, QFont::Bold));
+  p.setPen(Qt::white);
+  p.drawText(card.adjusted(0, GEAR_VALUE_OFFSET, 0, 0), Qt::AlignTop | Qt::AlignHCenter, gear_text);
 }
 
 void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) {

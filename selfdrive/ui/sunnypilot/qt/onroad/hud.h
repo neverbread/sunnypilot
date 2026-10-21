@@ -24,6 +24,7 @@ public:
 
 private:
   void drawVehicleReadings(QPainter &p, const QRect &surface_rect);
+  void drawGearIndicator(QPainter &p, const QRect &surface_rect);
   void drawClutchIndicators(QPainter &p, const QRect &surface_rect);
   void drawTirePressures(QPainter &p, const QRect &surface_rect);
   bool show_engine_temperatures = false;
@@ -31,6 +32,7 @@ private:
   bool show_boost = false;
   bool show_clutch_states = false;
   bool show_tire_pressures = false;
+  bool show_gear = false;
   // Front left, front right, rear left, rear right, as the vehicle reports them.
   float tire_pressures_psi[4] = {};
   bool tpms_warning = false;
@@ -44,4 +46,5 @@ private:
   QString clutch1_temperature;
   QString clutch2_temperature;
   QString boost_pressure;
+  QString gear_text;
 };

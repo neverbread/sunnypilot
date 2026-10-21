@@ -18,6 +18,8 @@ public:
   virtual void draw(QPainter &p, const QRect &surface_rect);
 
 protected:
+  // Exposed so anything hung off the set-speed card tracks its real geometry.
+  QRect setSpeedRect() const;
   void drawSetSpeed(QPainter &p, const QRect &surface_rect);
   void drawCurrentSpeed(QPainter &p, const QRect &surface_rect);
   void drawText(QPainter &p, int x, int y, const QString &text, const QColor &color = Qt::white);

@@ -172,6 +172,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"DctTemperatureDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"BoostDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"ClutchStateDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
+    {"GearDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"TirePressureDisplay", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"LeadTrackingBox", {PERSISTENT | BACKUP, BOOL, "1"}},
 

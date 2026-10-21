@@ -132,6 +132,13 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       false,
     },
     {
+      "GearDisplay",
+      tr("Transmission Gear Display"),
+      tr("Show the gear your transmission reports, in a small card beside the MAX speed card on the driving screen for the 2018 Elantra GT Sport. It reads the same transmission diagnostic as the DCT clutch toggles, and shows nothing while no gear is engaged. Takes effect after restarting the car."),
+      "../assets/icons/metric.png",
+      false,
+    },
+    {
       "TirePressureDisplay",
       tr("Tire Pressure Display"),
       tr("Show the four tire pressures your vehicle's own sensors report, along the bottom of the driving screen. Uses kPa with Use Metric System enabled, otherwise psi. Only the vehicle's psi reporting is read, so vehicles without the signal, or with the cluster set to another unit, show nothing. Amber marks a corner at least 3 psi below the highest of the four: a comparison between your own tires, not a factory warning threshold."),
