@@ -385,6 +385,40 @@ class TestBoost(unittest.TestCase):
         else:
           self.assertEqual(pressure_times + barometer_times, [])
 
+  def test_temperatures_yield_their_slots_to_the_manifold(self):
+    # Coolant and oil move on a tens-of-seconds timescale, so when the manifold is live they give up
+    # most of their slots. They still have to survive lost replies: the temp stamp is taken at
+    # request, so a lost read re-arms the whole interval, and a reading that ages past STALE_AFTER
+    # shows a dash instead of a number. Every fourth oil reply is lost here to keep that honest.
+    replies = {temperature.OIL_REQUEST: oil_frames(), temperature.CLUTCH_REQUEST: clutch_frames(),
+               temperature.PRESSURE_REQUEST: [single_frame(COOLANT_PAYLOAD)],
+               temperature.BAROMETER_REQUEST: [single_frame(bytes.fromhex("413365"))]}
+    reader = temperature.EngineTemperatureReader(engine_enabled=True, clutch_enabled=True, boost_enabled=True)
+    wanted = (temperature.CLUTCH_REQUEST, temperature.PRESSURE_REQUEST, temperature.OIL_REQUEST)
+    pending, times, served = [], {request: [] for request in wanted}, {r: 0 for r in replies}
+    for tick in range(6000):
+      now = tick / 50
+      outgoing = reader.update(now, pending)
+      pending = []
+      for request in outgoing:
+        if request in times:
+          times[request].append(now)
+        if request in replies:
+          served[request] += 1
+          if request != temperature.OIL_REQUEST or served[request] % 4:
+            pending = replies[request]
+      if now > 6.0:
+        self.assertTrue(reader.readings(now)["oilValid"])
+    clutch, pressure, oil = (times[request] for request in wanted)
+    self.assertAlmostEqual(len(clutch) / 120.0, 2.0, delta=0.1)
+    # Two consecutive losses at TEMP_POLL_INTERVAL must stay inside STALE_AFTER: at 2.0 s they did
+    # not, and the cell blanked.
+    self.assertLess(max(b - a for a, b in itertools.pairwise(oil)), 3.5)
+    # 1.04 s is the no-loss contract the toggle test holds; a lost reply burns a whole timeout,
+    # so under injection the manifold waits longer without the gauge ever going blank.
+    self.assertLess(max(b - a for a, b in itertools.pairwise(pressure)), 1.4)
+    self.assertGreater(len(pressure), 2 * len(oil))  # the freed slots went to MAP, not to oil
+
 
 class TestClutchTemperatures(unittest.TestCase):
   def setUp(self):
@@ -700,11 +734,12 @@ class TestClutchState(unittest.TestCase):
     raise AssertionError("slipping never latched")
 
   def test_dwell_measures_time_not_sample_count(self):
-    # The scheduler's rate varies, so a sample-count dwell would latch late at 1 Hz.
-    latched_at = {spacing: self.latch_time(spacing) for spacing in (0.5, 1.0)}
-    self.assertEqual(latched_at[0.5], latched_at[1.0])
-    self.assertGreaterEqual(latched_at[0.5], temperature.SLIP_DWELL_ON)
-    self.assertLess(latched_at[0.5], temperature.SLIP_DWELL_ON + 0.5)
+    # The scheduler's rate varies, so a sample-count dwell would latch late at 2 Hz: two samples
+    # is 0.5 s at 4 Hz but a full second at 2 Hz, while the time dwell latches at 0.5 s either way.
+    latched_at = {spacing: self.latch_time(spacing) for spacing in (0.25, 0.5)}
+    self.assertEqual(latched_at[0.25], latched_at[0.5])
+    self.assertGreaterEqual(latched_at[0.25], temperature.SLIP_DWELL_ON)
+    self.assertLess(latched_at[0.25], temperature.SLIP_DWELL_ON + 0.25)
 
   def test_a_lone_slip_sample_does_not_flicker_the_glyph(self):
     tracker = temperature.ClutchStateTracker()
@@ -719,9 +754,27 @@ class TestClutchState(unittest.TestCase):
     slipping = clutch_payload(gear=1, shaft1=700.0, slip1=400.0)
     states = [readings["clutch1State"] for readings in
               self.poll_states((engaged, slipping, slipping, slipping, slipping))]
-    # The dwell starts at the first slipping sample, so two half-second polls pass before it latches.
-    self.assertEqual(states, [temperature.ENGAGED, temperature.ENGAGED, temperature.ENGAGED,
+    # The dwell starts at the first slipping sample, so one more half-second poll passes before it
+    # latches: the shortest dwell that still needs two samples of evidence.
+    self.assertEqual(states, [temperature.ENGAGED, temperature.ENGAGED, temperature.SLIPPING,
                               temperature.SLIPPING, temperature.SLIPPING])
+
+  def test_latch_survives_the_shortest_sample_gap_the_scheduler_produces(self):
+    # Requests are CLUTCH_POLL_INTERVAL apart, but the tracker is stamped when a reply's last frame
+    # lands, so its own samples are 0.44-0.54 s apart depending on ECU latency. A dwell set to the
+    # nominal spacing quietly costs an extra sample on the short gaps: these three polls land 0.52 s
+    # then 0.44 s apart, and two samples of evidence still have to latch across the 0.44 s one.
+    engaged = clutch_payload(gear=1, shaft1=700.0, slip1=40.0)
+    slipping = clutch_payload(gear=1, shaft1=700.0, slip1=400.0)
+    states = []
+    for index, (payload, delay) in enumerate(((engaged, 0.02), (slipping, 0.06), (slipping, 0.02))):
+      at = index * temperature.CLUTCH_POLL_INTERVAL
+      frames = clutch_frames(payload)
+      self.assertEqual(self.reader.update(at, []), [temperature.CLUTCH_REQUEST])
+      self.assertEqual(self.reader.update(at + 0.01, frames[:1]), [temperature.CLUTCH_FLOW_CONTROL])
+      self.assertEqual(self.reader.update(at + delay, frames[1:]), [])
+      states.append(self.reader.readings(at + delay)["clutch1State"])
+    self.assertEqual(states, [temperature.ENGAGED, temperature.ENGAGED, temperature.SLIPPING])
 
   def test_slipping_clears_only_once_slip_has_actually_stopped(self):
     engaged = clutch_payload(gear=1, shaft1=700.0, slip1=40.0)
@@ -729,9 +782,25 @@ class TestClutchState(unittest.TestCase):
     states = [readings["clutch1State"] for readings in
               self.poll_states((engaged, slipping, slipping, slipping, slipping,
                                 engaged, engaged, engaged, engaged))]
-    self.assertEqual(states, [temperature.ENGAGED, temperature.ENGAGED, temperature.ENGAGED,
+    # Latches on the second slipping sample, then holds until slip has been absent for the whole
+    # release dwell: 2.5 s of slip, cleared only at 3.5 s, one poll after the 0.6 s dwell is met.
+    self.assertEqual(states, [temperature.ENGAGED, temperature.ENGAGED,
                               temperature.SLIPPING, temperature.SLIPPING, temperature.SLIPPING,
-                              temperature.SLIPPING, temperature.ENGAGED, temperature.ENGAGED])
+                              temperature.SLIPPING, temperature.SLIPPING, temperature.ENGAGED,
+                              temperature.ENGAGED])
+
+  def test_release_dwell_clears_on_the_third_sample_at_the_real_spacing(self):
+    # At poll_states' default 0.5 s spacing this cannot tell 0.6 from 1.0, both clearing on the
+    # third non-evidence sample. At the 0.48 s the scheduler produces, 0.45 clears on the second,
+    # 0.6 on the third and 1.0 on the fourth: that spread is what holds the release at 0.6.
+    engaged = clutch_payload(gear=1, shaft1=700.0, slip1=40.0)
+    slipping = clutch_payload(gear=1, shaft1=700.0, slip1=400.0)
+    states = [readings["clutch1State"] for readings in
+              self.poll_states((engaged, slipping, slipping, slipping,
+                                engaged, engaged, engaged, engaged, engaged), spacing=0.48)]
+    self.assertEqual(states, [temperature.ENGAGED, temperature.ENGAGED, temperature.SLIPPING,
+                              temperature.SLIPPING, temperature.SLIPPING, temperature.SLIPPING,
+                              temperature.ENGAGED, temperature.ENGAGED, temperature.ENGAGED])
 
   def test_recorded_clamped_and_creep_bands_classify_apart(self):
     # 5 and 136 rpm are the recorded median and p90 of slip on the driving clutch while it is
