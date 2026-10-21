@@ -148,13 +148,15 @@ void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) 
   const int row_count = 2 * (int(show_engine_temperatures) + int(show_dct_temperatures)) + int(show_boost);
   if (row_count == 0 || surface_rect.width() < 800) return;
 
-  // Use a wider card for readable values, leaving room for the speed display
-  // in split camera views. Compact five rows to stay between the buttons.
+  // Left column. Use a wider card for readable values, leaving room for the speed
+  // display in split camera views. Compact five rows to stay between the buttons.
   const bool compact = row_count == 5;
   const int card_width = std::min(320, surface_rect.width() / 2 - 150);
   const int row_height = compact ? 106 : 128;
-  const QRect card(surface_rect.right() + 1 - UI_BORDER_SIZE - card_width,
+  const QRect card(surface_rect.left() + UI_BORDER_SIZE,
                    surface_rect.top() + UI_BORDER_SIZE + btn_size + 20, card_width, row_count * row_height + 4);
+  // The driver monitoring icon sits in this column's lower corner, so a card that
+  // would reach it is dropped rather than overlapped.
   if (card.bottom() + 20 >= surface_rect.bottom() + 1 - UI_BORDER_SIZE - btn_size) return;
 
   p.save();
@@ -210,8 +212,9 @@ void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) 
 void HudRendererSP::drawClutchIndicators(QPainter &p, const QRect &surface_rect) {
   if (!show_clutch_states || surface_rect.width() < 800) return;
 
-  // Left column, centred between the same anchors the readings card uses, which
-  // keeps the glyphs below the set-speed card and clear of the driver face.
+  // Right column, centred between the same anchors the readings card uses, which
+  // keeps the glyphs below the set-speed card. The driver monitoring icon lives in
+  // the left column's lower corner, so this side has the height to spare.
   // Stacked rather than side by side: the column has height to spare and the
   // glyphs can be much larger without reaching toward the speed numeral.
   const int glyph_size = 104, glyph_gap = 22, panel_padding = 20, caption_height = 40;
@@ -219,8 +222,9 @@ void HudRendererSP::drawClutchIndicators(QPainter &p, const QRect &surface_rect)
   const int top_anchor = surface_rect.top() + UI_BORDER_SIZE + btn_size + 20;
   const int bottom_anchor = surface_rect.bottom() + 1 - UI_BORDER_SIZE - btn_size;
   if (panel_height > bottom_anchor - top_anchor) return;  // Short surfaces cannot fit the stack.
-  const QRect panel(surface_rect.left() + UI_BORDER_SIZE, (top_anchor + bottom_anchor - panel_height) / 2,
-                    glyph_size + 2 * panel_padding, panel_height);
+  const int panel_width = glyph_size + 2 * panel_padding;
+  const QRect panel(surface_rect.right() + 1 - UI_BORDER_SIZE - panel_width,
+                    (top_anchor + bottom_anchor - panel_height) / 2, panel_width, panel_height);
 
   p.save();
   p.setPen(Qt::NoPen);
