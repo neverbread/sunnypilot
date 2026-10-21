@@ -29,7 +29,7 @@ public:
       return EngineTemperatureFrame{address, {0x30, 0x00, 0x0A, 0, 0, 0, 0, 0}};
     }
     if (kind != COOLANT && kind != OIL && kind != CLUTCH && kind != PRESSURE && kind != BAROMETER) return std::nullopt;
-    // Allow scheduling jitter around the reader's shortest quarter-second interval.
+    // Host-side shared diagnostic floor; the reader spaces requests by 240 ms.
     if (request_sent && (now < last_request || now - last_request < 230000000ULL)) return std::nullopt;
     last_request = now;
     request_sent = true;

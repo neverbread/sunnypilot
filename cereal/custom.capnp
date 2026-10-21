@@ -271,6 +271,11 @@ struct CarStateSP @0xb86e6369214c01c8 {
   tirePressureValid @2 :Bool;
   # The vehicle's own low-pressure telltale, not a sunnypilot threshold.
   tpmsWarning @3 :Bool;
+
+  # Fresh display-only TCU12 raw gear for the verified Elantra GT. Forward
+  # gears are 1..7; recognized non-forward codes 0/14 suppress the number.
+  currentGear @4 :UInt8;
+  currentGearValid @5 :Bool;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {

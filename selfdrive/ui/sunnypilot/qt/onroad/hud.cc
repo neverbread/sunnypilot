@@ -46,9 +46,9 @@ constexpr int GEAR_MIN_SURFACE_WIDTH = 1100;
 
 // engineTemperature publishes the clutch states as plain numbers, not an enum.
 constexpr int CLUTCH_UNKNOWN = 0, CLUTCH_DISENGAGED = 1, CLUTCH_ENGAGED = 2, CLUTCH_SLIPPING = 3;
-// The reader already holds the last decoded pair for five seconds. Holding it
-// again here keeps a single dropped publish from flashing the glyphs off.
-constexpr uint64_t CLUTCH_HOLD_NANOS = 10000000000ULL;
+// Fast drivetrain readings expire even if their publisher stops. The reader
+// separately checks the age of each diagnostic sample while it is running.
+constexpr uint64_t CLUTCH_FRESH_NANOS = 1500000000ULL;
 }  // namespace
 
 HudRendererSP::HudRendererSP() {}
@@ -68,6 +68,21 @@ void HudRendererSP::updateState(const UIState &s) {
                        (sm["carState"].getCarState().getBrakePressed() ||
                         (fresh_service("carStateSP") && sm["carStateSP"].getCarStateSP().getBrakeLights()));
   current_speed_color = braking ? QColor(255, 0, 0) : QColor(Qt::white);
+
+  // Prefer the verified current-gear CAN broadcast over the slower TCM poll.
+  // A fresh non-forward code also overrides an older diagnostic forward gear.
+  show_gear = false;
+  gear_text.clear();
+  bool passive_gear_available = false;
+  if (s.scene.started && s.scene.gear_display && fresh_service("carStateSP")) {
+    const auto car_state_sp = sm["carStateSP"].getCarStateSP();
+    passive_gear_available = car_state_sp.getCurrentGearValid();
+    const int gear = car_state_sp.getCurrentGear();
+    if (passive_gear_available && GEAR_MIN <= gear && gear <= GEAR_MAX) {
+      gear_text = QString::number(gear);
+      show_gear = true;
+    }
+  }
 
   // Hide supplementary readings during alerts and while selfdrive is unavailable.
   const bool selfdrive_ready = sm.alive("selfdriveState") && sm.valid("selfdriveState") &&
@@ -96,8 +111,7 @@ void HudRendererSP::updateState(const UIState &s) {
   show_dct_temperatures = false;
   show_boost = false;
   show_clutch_states = false;
-  show_gear = false;
-  gear_text.clear();
+  clutch1_state = clutch2_state = CLUTCH_UNKNOWN;
   oil_background = Qt::transparent;
   boost_background = Qt::transparent;
   if (!current_drive) return;
@@ -141,20 +155,17 @@ void HudRendererSP::updateState(const UIState &s) {
     const int alpha = static_cast<int>(std::lround(190.0 * std::sqrt(fraction)));
     boost_background = boost_kpa < 0.0f ? QColor(35, 105, 245, alpha) : QColor(230, 45, 55, alpha);
   }
-  if (fresh) {
+  const bool drivetrain_fresh = fresh && now - sm.rcv_time("engineTemperature") <= CLUTCH_FRESH_NANOS;
+  if (drivetrain_fresh) {
     // An unknown pair is a real reading — neutral, or the transmission not
     // reporting a gear — so take it as published while the service is fresh.
     clutch1_state = static_cast<int>(temperatures.getClutch1State());
     clutch2_state = static_cast<int>(temperatures.getClutch2State());
-    last_clutch_state_nanos = now;
-  } else if (now - last_clutch_state_nanos > CLUTCH_HOLD_NANOS) {
-    clutch1_state = clutch2_state = CLUTCH_UNKNOWN;
   }
-  // The gear rides in the same TCM reply as the clutch readings, and the GearDisplay toggle keeps
-  // enginetempd polling that reply on its own, so the badge does not depend on the DCT toggles.
+  // Fall back to the coherent diagnostic sample when passive gear is unavailable.
   // It is not hidden by an alert the way the diagnostic strip is: it belongs to the set-speed card
   // it is attached to, and that card stays up.
-  if (fresh && s.scene.gear_display) {
+  if (!passive_gear_available && drivetrain_fresh && s.scene.gear_display) {
     const float reported_gear = temperatures.getGear();
     if (std::isfinite(reported_gear)) {
       const int gear = static_cast<int>(std::lround(reported_gear));

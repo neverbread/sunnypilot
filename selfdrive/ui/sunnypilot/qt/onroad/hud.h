@@ -38,7 +38,6 @@ private:
   bool tpms_warning = false;
   // 0 unknown / 1 disengaged / 2 engaged / 3 slipping, as engineTemperature publishes them.
   int clutch1_state = 0, clutch2_state = 0;
-  uint64_t last_clutch_state_nanos = 0;
   QColor oil_background = Qt::transparent;
   QColor boost_background = Qt::transparent;
   QString oil_temperature;

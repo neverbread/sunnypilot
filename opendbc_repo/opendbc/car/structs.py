@@ -134,3 +134,5 @@ class CarStateSP:
   tirePressuresPsi: list[float] = auto_field()
   tirePressureValid: bool = auto_field()
   tpmsWarning: bool = auto_field()
+  currentGear: int = auto_field()
+  currentGearValid: bool = auto_field()

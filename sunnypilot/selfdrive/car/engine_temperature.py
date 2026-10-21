@@ -13,15 +13,13 @@ CanFrame = tuple[int, bytes, int]
 DIAGNOSTIC_BUS = 1
 ECM_RESPONSE = 0x7E8
 TCM_RESPONSE = 0x7E9
-POLL_INTERVAL = 1.0  # One request per second total across the enabled groups.
-BOOST_POLL_INTERVAL = 0.5  # Alternate MAP with slower temperature/barometer reads.
-# Panda enforces one global floor across every request kind (230 ms in
+POLL_INTERVAL = 1.0  # One request per second when only slow engine temperatures are enabled.
+# Host pandad enforces one global floor across every request kind (230 ms in
 # engine_temperature.h), so ~4.3 requests per second is the whole budget.
-REQUEST_SPACING = 0.24  # Above panda's 230 ms floor and a whole number of 50 Hz loop ticks,
+REQUEST_SPACING = 0.24  # Above pandad's 230 ms floor and a whole number of 50 Hz loop ticks,
                         # so slots do not drift and stretch the slower groups' intervals.
-CLUTCH_POLL_INTERVAL = 0.48  # Exactly two slots. 0.5 was not a multiple of the slot spacing, so the
-                             # TCM drifted to gaps of 0.74 s between reads; this holds 0.50 s mean
-                             # and 0.52 s max at a fixed reply latency, 0.54 s once it jitters.
+BOOST_POLL_INTERVAL = REQUEST_SPACING  # Use every free slot, yielding to due slower reads.
+CLUTCH_POLL_INTERVAL = 2 * REQUEST_SPACING  # Reserve every other slot when sharing with ECM reads.
 TEMP_POLL_INTERVAL = 2.0  # Coolant and oil move on a tens-of-seconds timescale, so the slots they no
                           # longer need go to the manifold. What makes this safe is the retry in
                           # update(): the stamp is taken at request, so without it k consecutive
@@ -38,6 +36,7 @@ BAROMETER_FALLBACK_KPA = 101.325
 RESPONSE_TIMEOUT = 0.5
 STALE_AFTER = 5.0
 BOOST_STALE_AFTER = 2.0
+CLUTCH_STATE_STALE_AFTER = 1.5  # Gear, shaft speed, slip and inferred states change much faster than temperature.
 
 COOLANT_REQUEST = (0x7DF, bytes.fromhex("02 01 05 00 00 00 00 00"), DIAGNOSTIC_BUS)
 PRESSURE_REQUEST = (0x7DF, bytes.fromhex("03 01 05 0B 00 00 00 00"), DIAGNOSTIC_BUS)
@@ -63,22 +62,13 @@ STANDSTILL_SHAFT_RPM = 60.0  # A stopped shaft means the clutch is open, whateve
 # speed it modulates at a median of 155 rpm with a p90 of 599. Both thresholds sit either side
 # of the clamped band, so ordinary creep no longer reads as slipping.
 SLIP_RPM = 300.0
-SLIP_RELEASE_RPM = 140.0  # Hysteresis band between the two holds the previous state.
-# The dwell is compared against the tracker's own sample spacing, not the nominal poll interval:
-# requests are CLUTCH_POLL_INTERVAL apart, but a sample is stamped when the reply's last frame
-# lands, so the spacing the dwell sees is 0.44-0.54 s depending on ECU latency. A dwell of 0.5 is
-# longer than most of those gaps and quietly costs a third sample, and 0.45 still did on the short
-# ones. Any dwell above zero still needs two consecutive readings at or above SLIP_RPM, since a
-# reading between the thresholds resets the count, so going under the shortest gap costs nothing in
-# noise immunity. The shortest-gap latch test pins it.
+SLIP_RELEASE_RPM = 140.0  # Hysteresis holds engaged/slipping, never unknown or disengaged.
+# Dwell measures reply time, not request count. Shared polling is nominally 0.48 s apart but reply
+# latency shifts the sample spacing; 0.4 s still latches on two shared samples as close as 0.44 s.
+# Solo polling at 0.24 s needs three samples. Faster acquisition must not weaken the time filter.
 SLIP_DWELL_ON = 0.4
-# The release counts consecutive samples that are not slip evidence and clears on the
-# ceil(dwell/spacing)+1-th: three at 0.6, two at 0.45. A lone low reading resets that count, so this
-# filters interruptions of about a second rather than noise, and those are real: a gear change flips
-# the parity gate and a creeping shaft crosses standstill, either of which would end the event at
-# 0.45 and force a full re-latch. 0.45 would clear a genuine stop one sample (about 0.5 s) sooner,
-# and the recorded route has no two-sample interruption to trip over, so it stays here until a route
-# that has one says otherwise.
+# Release requires continuous non-slip evidence for 0.6 s: three samples at shared 0.48 s spacing,
+# or four at solo 0.24 s. Brief gear-change/standstill interruptions cannot flicker the indicator.
 SLIP_DWELL_OFF = 0.6
 GEAR_MIN, GEAR_MAX = 1, 7  # Seven-speed box. Recorded raw values are 0 (no gear) and 14 (invalid).
 # Raw values ride to the UI so thresholds can be retuned from a logged route.
@@ -170,7 +160,7 @@ def classify_clutch(clutch: int, sample: dict[str, float], previous: int) -> int
     return SLIPPING
   if slip <= SLIP_RELEASE_RPM:
     return ENGAGED
-  return previous
+  return SLIPPING if previous == SLIPPING else ENGAGED
 
 
 class ClutchStateTracker:
@@ -183,8 +173,13 @@ class ClutchStateTracker:
     self._states = [UNKNOWN, UNKNOWN]
     self._slip_since: list[float | None] = [None, None]
     self._clear_since: list[float | None] = [None, None]
+    self._last_sample: float | None = None
 
   def update(self, now: float, sample: dict[str, float]) -> tuple[int, int]:
+    if self._last_sample is not None and not 0 <= now - self._last_sample < CLUTCH_STATE_STALE_AFTER:
+      # Samples separated by an outage cannot establish continuous slip or revive an expired state.
+      self.reset()
+    self._last_sample = now
     for index, clutch in enumerate((1, 2)):
       candidate = classify_clutch(clutch, sample, self._states[index])
       # A returned SLIPPING is not evidence on its own: inside the dead band classify holds the
@@ -222,11 +217,10 @@ class EngineTemperatureReader:
     self._engine_enabled = engine_enabled
     self._boost_enabled = boost_enabled
     self._clutch_enabled = clutch_enabled
-    if clutch_enabled:
-      # The clutch takes two slots per second; the rest split what panda allows.
-      self._poll_interval = REQUEST_SPACING if (engine_enabled or boost_enabled) else CLUTCH_POLL_INTERVAL
-    else:
-      self._poll_interval = BOOST_POLL_INTERVAL if boost_enabled else POLL_INTERVAL
+    self._poll_interval = REQUEST_SPACING if clutch_enabled or boost_enabled else POLL_INTERVAL
+    # With no competing ECM displays the clutch can use every slot. Its priority stays at two
+    # slots when sharing so temperatures and manifold pressure cannot be starved.
+    self._clutch_interval = CLUTCH_POLL_INTERVAL if engine_enabled or boost_enabled else REQUEST_SPACING
     self._poll_order = (("oil",) if boost_enabled else ("coolant", "oil")) if engine_enabled else ()
     self._clutch_tracker = ClutchStateTracker()
     self.reset()
@@ -263,7 +257,7 @@ class EngineTemperatureReader:
       return False
     if self._last_clutch is None:
       return True
-    return now - self._last_clutch >= CLUTCH_POLL_INTERVAL + self._clutch_penalty
+    return now - self._last_clutch + 1e-9 >= self._clutch_interval + self._clutch_penalty
 
   def _temp_due(self, now: float) -> str | None:
     """The temperature read that has aged past TEMP_POLL_INTERVAL, or None if none has."""
@@ -273,19 +267,31 @@ class EngineTemperatureReader:
     return sensor if now - oldest >= TEMP_POLL_INTERVAL else None
 
   def _slow_due(self, now: float) -> str | None:
-    """The barometric or temperature read that has aged out, if either has. Reference first."""
+    """Reference first, unless another slow TCM slot would put a temperature near expiry."""
+    temp = self._temp_due(now)
+    if self._temp_near_expiry(temp, now + RESPONSE_TIMEOUT + REQUEST_SPACING):
+      return temp
     if self._barometer_due(now):
       return "barometer"
-    return self._temp_due(now)
+    return temp
+
+  def _temp_near_expiry(self, sensor: str | None, now: float) -> bool:
+    if sensor not in self._poll_order:
+      return False
+    _, stamp = self._values.get(sensor, (0.0, float("-inf")))
+    if stamp == float("-inf") or stamp < self._last_temp.get(sensor, float("-inf")):
+      return False  # A failed/missing temperature must not monopolize retries ahead of working MAP.
+    # Allow one TCM timeout, a request slot, and this temperature's own response time.
+    return now - stamp >= STALE_AFTER - 2 * RESPONSE_TIMEOUT - REQUEST_SPACING
 
   def _barometer_due(self, now: float) -> bool:
     # The reference only matters once there is a manifold pressure to compare it against.
     return (self._boost_enabled and self._last_pressure is not None and
             (self._last_barometer_request is None or now - self._last_barometer_request >= BAROMETER_INTERVAL))
 
-  def _next_request(self, now: float) -> str:
+  def _next_request(self, now: float) -> str | None:
     # Priority rather than rotation. The clutch drives a live indicator and the manifold is the only
-    # fast-moving reading, so they take the slots; the slow reads only have to stay inside their own
+    # fast-moving ECM reading, so they take the slots; the slow reads only have to stay inside their own
     # staleness window, and the manifold absorbs every slot they do not need.
     if self._clutch_due(now):
       self._last_clutch = now
@@ -300,6 +306,7 @@ class EngineTemperatureReader:
       # due again on the very next slot and an uncapped veto starves the temperatures outright.
       wait = CLUTCH_POLL_INTERVAL if self._clutch_enabled else self._poll_interval
       if slow is not None and self._boost_enabled and self._last_pressure is not None and \
+             not self._temp_near_expiry(slow, now) and \
              self._slow_vetoes < SLOW_VETO_MAX and now - self._last_pressure + wait > MAP_MAX_AGE:
         self._slow_vetoes += 1
         slow = None
@@ -313,7 +320,7 @@ class EngineTemperatureReader:
         # Nothing faster is waiting, so keep the temperatures as fresh as the bus allows.
         request = min(self._poll_order, key=lambda sensor: self._last_temp.get(sensor, float("-inf")))
       else:
-        request = "clutch"
+        return None  # A solo TCM that timed out must still observe its retry backoff.
     if request in ("coolant", "oil"):
       self._last_temp[request] = now
     elif request == "barometer":
@@ -440,11 +447,14 @@ class EngineTemperatureReader:
       if self._receive(data, now):
         outgoing.append(CLUTCH_FLOW_CONTROL if self._pending == "clutch" else OIL_FLOW_CONTROL)
 
-    if self._pending is None and (self._last_request is None or now - self._last_request >= self._poll_interval):
+    # A nanosecond tolerance avoids losing a whole 20 ms loop tick to float rounding at a slot
+    # boundary. The 10 ms margin over pandad's floor is unchanged; no catch-up requests are queued.
+    if self._pending is None and (self._last_request is None or now - self._last_request + 1e-9 >= self._poll_interval):
       self._pending = self._next_request(now)
-      self._last_request = now
-      self._deadline = now + RESPONSE_TIMEOUT
-      outgoing.append(REQUESTS[self._pending])
+      if self._pending is not None:
+        self._last_request = now
+        self._deadline = now + RESPONSE_TIMEOUT
+        outgoing.append(REQUESTS[self._pending])
 
     return outgoing
 
@@ -457,11 +467,11 @@ class EngineTemperatureReader:
       readings[f"{sensor}Valid"] = valid
     for sensor, key in CLUTCH_READING_KEYS:
       value, timestamp = self._values.get(sensor, (0.0, float("-inf")))
-      readings[key] = value if 0 <= now - timestamp < STALE_AFTER else 0.0
+      readings[key] = value if 0 <= now - timestamp < CLUTCH_STATE_STALE_AFTER else 0.0
     _, timestamp = self._values.get("clutch1", (0.0, float("-inf")))
-    # Every clutch field shares one payload timestamp, so state expires with the temperatures.
+    # Every clutch field shares a timestamp, but rapidly changing state must expire before temperatures.
     readings["clutch1State"], readings["clutch2State"] = (
-        self._clutch_states if 0 <= now - timestamp < STALE_AFTER else (UNKNOWN, UNKNOWN))
+        self._clutch_states if 0 <= now - timestamp < CLUTCH_STATE_STALE_AFTER else (UNKNOWN, UNKNOWN))
     value, timestamp = self._values.get("boost", (0.0, float("-inf")))
     valid = 0 <= now - timestamp < BOOST_STALE_AFTER
     readings["boostKpa"] = value if valid else 0.0

@@ -29,10 +29,13 @@ class TestEngineTemperatureRuntime(unittest.TestCase):
       self.assertEqual(restored.safetyConfigs[0].safetyParam, 64 | 2048)
 
   def test_daemon_publishes_valid_messages_and_boottime_timestamps(self):
-    for engine, clutch, boost in itertools.product((False, True), repeat=3):
-      with self.subTest(engine=engine, clutch=clutch, boost=boost):
-        request_kind = "pressure" if boost else "coolant" if engine else "clutch" if clutch else None
-        flags = {"EngineTemperatureDisplay": engine, "DctTemperatureDisplay": clutch, "BoostDisplay": boost, "ControlsReady": True}
+    for engine, clutch, boost, gear in itertools.product((False, True), repeat=4):
+      with self.subTest(engine=engine, clutch=clutch, boost=boost, gear=gear):
+        # A gear-only display must keep its TCM diagnostic fallback alive. The
+        # shared reader gives that request priority over the first ECM read.
+        request_kind = "clutch" if clutch or gear else "pressure" if boost else "coolant" if engine else None
+        flags = {"EngineTemperatureDisplay": engine, "DctTemperatureDisplay": clutch, "BoostDisplay": boost,
+                 "GearDisplay": gear, "ControlsReady": True}
         cp = self.car_params()
         params = NS(get=Mock(return_value=cp.to_bytes()), get_bool=lambda key: flags.get(key, False))
         messages = []

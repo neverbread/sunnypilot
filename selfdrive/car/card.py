@@ -139,8 +139,9 @@ class Car:
       safety_config.safetyModel = structs.CarParams.SafetyModel.noOutput
       self.CP.safetyConfigs = [safety_config]
 
-    # The clutch state glyphs read the same transmission diagnostic as the clutch temperatures.
-    clutch_reads = self.params.get_bool("DctTemperatureDisplay") or self.params.get_bool("ClutchStateDisplay")
+    # Clutch states and the gear display's fallback share the transmission diagnostic.
+    clutch_reads = (self.params.get_bool("DctTemperatureDisplay") or self.params.get_bool("ClutchStateDisplay") or
+                    self.params.get_bool("GearDisplay"))
     configure_engine_temperatures(self.CP, self.params.get_bool("EngineTemperatureDisplay"),
                                    clutch_reads, self.params.get_bool("BoostDisplay"))
 

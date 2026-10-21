@@ -9,7 +9,7 @@ from enum import StrEnum
 
 from opendbc.car import Bus, structs
 from opendbc.can.parser import CANParser
-from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.car.hyundai.values import CAR, HyundaiFlags
 from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 
 # TPMS11 arrives about every 200 ms on the vehicles that report it. Five seconds
@@ -18,6 +18,7 @@ from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 TPMS_STALE_NANOS = int(5e9)
 TPMS_UNIT_PSI = 0
 TPMS_SIGNALS = ("PRESSURE_FL", "PRESSURE_FR", "PRESSURE_RL", "PRESSURE_RR")
+CURRENT_GEAR_STALE_NANOS = 250_000_000
 
 
 class CarStateExt:
@@ -67,14 +68,17 @@ class CarStateExt:
 
   def update_sp_ext(self, ret_sp: structs.CarStateSP, can_parsers: dict[StrEnum, CANParser]) -> None:
     cp = can_parsers[Bus.pt]
+    self.update_current_gear(ret_sp, cp)
     tpms = cp.vl["TPMS11"]
 
     # One message carries all four corners, so they share a freshness check.
     # CGW1 has no checksum or counter to fail and is always present while
     # driving, so its timestamp stands in for a clock.
     tpms_nanos = cp.ts_nanos["TPMS11"]["PRESSURE_FL"]
+    if not tpms_nanos:
+      return
     bus_nanos = cp.ts_nanos["CGW1"]["CF_Gway_IGNSw"]
-    if not tpms_nanos or bus_nanos - tpms_nanos > TPMS_STALE_NANOS:
+    if bus_nanos - tpms_nanos > TPMS_STALE_NANOS:
       return
 
     # The pressure bytes follow the unit the cluster is set to, which the UNIT
@@ -93,3 +97,27 @@ class CarStateExt:
     ret_sp.tirePressuresPsi = pressures
     ret_sp.tirePressureValid = True
     ret_sp.tpmsWarning = tpms["TPMS_W_LAMP"] != 0
+
+  def update_current_gear(self, ret_sp: structs.CarStateSP, cp: CANParser) -> None:
+    ret_sp.currentGear = 0
+    ret_sp.currentGearValid = False
+    if self.CP.carFingerprint != CAR.HYUNDAI_ELANTRA_GT_I30:
+      return
+
+    # This car's bus-0 TCU12 broadcasts at 100 Hz. Its CUR_GR matched all 20
+    # simultaneous 62 01 A4 current-gear replies in the recorded route, including
+    # two replies where next gear differed. Keep this display-only: clutch
+    # classification needs the coherent gear/slip/shaft diagnostic sample.
+    gear = int(cp.vl["TCU12"]["CUR_GR"])
+    gear_nanos = cp.ts_nanos["TCU12"]["CUR_GR"]
+    # Use the parser's update clock, which advances even when CGW1 or the whole
+    # bus is absent and works during replay. A future timestamp is not fresh.
+    age_nanos = cp._last_update_nanos - gear_nanos
+    if not gear_nanos or not 0 <= age_nanos <= CURRENT_GEAR_STALE_NANOS:
+      return
+    # 0/14 are recognized non-forward codes, not forward gear numbers. Preserve
+    # their presence so the UI does not fall back to an older diagnostic gear.
+    if gear not in (0, 1, 2, 3, 4, 5, 6, 7, 14):
+      return
+    ret_sp.currentGear = gear
+    ret_sp.currentGearValid = True

@@ -1,5 +1,6 @@
 """Transport/decoder tests runnable without cereal, native CAN, or hardware."""
 
+import heapq
 import importlib.util
 import itertools
 from pathlib import Path
@@ -41,6 +42,48 @@ def oil_frames(payload=OIL_PAYLOAD):
 
 def clutch_frames(payload=CLUTCH_PAYLOAD):
   return multiframe(payload, 0x7E9)
+
+
+def simulate_reader(reader, seconds=120, clutch_delay=0.02, answers=None, drop_oil_every=0, check=None):
+  """50 Hz caller with replies delayed until requested and ISO-TP CFs gated by flow control.
+
+  ECU consecutive frames are 10 ms apart, as requested by our STmin; a caller tick may consume
+  two of them. This models successful decoding, rather than handing over an entire reply before FC.
+  """
+  replies = {temperature.COOLANT_REQUEST: [single_frame(COOLANT_PAYLOAD[:3])],
+             temperature.PRESSURE_REQUEST: [single_frame(COOLANT_PAYLOAD)],
+             temperature.BAROMETER_REQUEST: [single_frame(bytes.fromhex("413365"))],
+             temperature.OIL_REQUEST: oil_frames(), temperature.CLUTCH_REQUEST: clutch_frames()}
+  continuations = {temperature.OIL_FLOW_CONTROL: oil_frames()[1:],
+                   temperature.CLUTCH_FLOW_CONTROL: clutch_frames()[1:]}
+  requests = {name: [] for name in temperature.REQUESTS}
+  samples = {sensor: [] for sensor in ("oil", "coolant", "clutch1", "boost")}
+  queued = []
+  for tick in range(seconds * 50):
+    now, incoming = tick / 50, []
+    while queued and queued[0][0] <= now + 1e-9:
+      _, response = heapq.heappop(queued)
+      incoming.append(response)
+    for outgoing in reader.update(now, incoming):
+      if outgoing in continuations:
+        for index, response in enumerate(continuations[outgoing], 1):
+          heapq.heappush(queued, (now + index * 0.01, response))
+      elif outgoing in replies:
+        kind = temperature.REQUEST_KINDS[outgoing]
+        requests[kind].append(now)
+        if answers is not None and outgoing not in answers:
+          continue
+        if kind == "oil" and drop_oil_every and len(requests[kind]) % drop_oil_every == 0:
+          continue
+        delay = clutch_delay if kind == "clutch" else 0.02
+        heapq.heappush(queued, (now + delay, replies[outgoing][0]))
+    for sensor, stamps in samples.items():
+      _, stamp = reader._values.get(sensor, (0.0, float("-inf")))
+      if stamp > float("-inf") and (not stamps or stamp != stamps[-1]):
+        stamps.append(stamp)
+    if check is not None:
+      check(now, reader.readings(now))
+  return requests, samples
 
 
 class TestEngineTemperature(unittest.TestCase):
@@ -375,7 +418,7 @@ class TestBoost(unittest.TestCase):
               self.assertEqual(readings[sensor + "Valid"], enabled)
         interval = temperature.REQUEST_SPACING if clutch else (
             temperature.BOOST_POLL_INTERVAL if boost else temperature.POLL_INTERVAL)
-        self.assertTrue(all(b - a >= interval for a, b in itertools.pairwise(primary_times)))
+        self.assertTrue(all(b - a >= interval - 1e-9 for a, b in itertools.pairwise(primary_times)))
         # Explicit contract with pandad's global 230 ms floor in engine_temperature.h:
         # asking more often than that only burns request timeouts.
         self.assertTrue(all(b - a >= 0.23 for a, b in itertools.pairwise(primary_times)))
@@ -452,26 +495,12 @@ class TestClutchTemperatures(unittest.TestCase):
     self.assertEqual(temperature.decode_clutch_temperatures(bytes(payload)), (0.0, 65535.0))
 
   def measure_rates(self, reader, seconds=60, answers=None):
-    """Rates over a window, since 0.24 s spacing does not align with a 0.1 s grid."""
-    replies = {temperature.COOLANT_REQUEST: [single_frame(COOLANT_PAYLOAD[:3])],
-               temperature.PRESSURE_REQUEST: [single_frame(COOLANT_PAYLOAD)],
-               temperature.BAROMETER_REQUEST: [single_frame(bytes.fromhex("413365"))],
-               temperature.OIL_REQUEST: oil_frames(), temperature.CLUTCH_REQUEST: clutch_frames()}
-    counts = {name: 0 for name in ("coolant", "oil", "clutch", "pressure", "barometer")}
-    pending = []
-    for tick in range(seconds * 50):
-      outgoing = reader.update(10.0 + tick / 50, pending)
-      pending = []
-      for request in outgoing:
-        if request not in replies or (answers is not None and request not in answers):
-          continue  # Flow control follows a primary request; not a slot of its own.
-        counts[temperature.REQUEST_KINDS[request]] += 1
-        pending = replies[request]
-    return {name: count / seconds for name, count in counts.items()}
+    requests, _ = simulate_reader(reader, seconds=seconds, answers=answers)
+    return {name: len(stamps) / seconds for name, stamps in requests.items()}
 
   def test_clutch_only_cadence(self):
     rates = self.measure_rates(self.reader)
-    self.assertAlmostEqual(rates["clutch"], 2.0, delta=0.1)
+    self.assertAlmostEqual(rates["clutch"], 4.16, delta=0.1)
     self.assertEqual(rates["coolant"] + rates["oil"] + rates["pressure"], 0)
 
   def test_all_groups_share_poll_cadence(self):
@@ -644,6 +673,73 @@ class TestClutchTemperatures(unittest.TestCase):
     self.assertEqual(self.reader.readings(0.1)["clutch2Celsius"], 35.0)
 
 
+class TestFastTelemetryScheduling(unittest.TestCase):
+  def assert_request_spacing(self, requests):
+    stamps = sorted(itertools.chain.from_iterable(requests.values()))
+    self.assertTrue(all(b - a >= 0.23 for a, b in itertools.pairwise(stamps)))
+
+  def test_solo_fast_displays_use_free_slots_and_decode_fresh_samples(self):
+    for clutch in (False, True):
+      with self.subTest(clutch=clutch):
+        reader = temperature.EngineTemperatureReader(engine_enabled=False, clutch_enabled=clutch, boost_enabled=not clutch)
+        requests, samples = simulate_reader(reader)
+        fast = samples["clutch1" if clutch else "boost"]
+        self.assertGreater(len(fast) / 120, 4.0)
+        self.assertLessEqual(max(b - a for a, b in itertools.pairwise(fast)), 0.48 + 1e-9)
+        self.assert_request_spacing(requests)
+
+  def test_shared_reads_are_fresh_with_realistic_flow_control(self):
+    for clutch_delay in (0.02, 0.38):
+      with self.subTest(clutch_delay=clutch_delay):
+        def check(now, readings):
+          if now > 6.0:
+            for sensor in ("oil", "coolant", "clutch1", "clutch2", "boost"):
+              self.assertTrue(readings[sensor + "Valid"])
+            self.assertEqual(readings["gear"], 1.0)  # Fast fields must also fit their shorter expiry.
+
+        reader = temperature.EngineTemperatureReader(engine_enabled=True, clutch_enabled=True, boost_enabled=True)
+        requests, samples = simulate_reader(reader, clutch_delay=clutch_delay, check=check)
+        self.assert_request_spacing(requests)
+        self.assertGreater(len(samples["oil"]), 30)
+        if clutch_delay == 0.02:
+          self.assertGreater(len(samples["clutch1"]) / 120, 2.0)
+          self.assertGreater(len(samples["boost"]) / 120, 1.5)
+        self.assertLess(max(b - a for a, b in itertools.pairwise(samples["clutch1"])), 1.5)
+
+  def test_lost_oil_responses_do_not_starve_shared_fast_reads(self):
+    def check(now, readings):
+      if now > 6.0:
+        self.assertTrue(readings["oilValid"])
+        self.assertTrue(readings["boostValid"])
+        self.assertEqual(readings["gear"], 1.0)
+
+    reader = temperature.EngineTemperatureReader(engine_enabled=True, clutch_enabled=True, boost_enabled=True)
+    requests, _ = simulate_reader(reader, drop_oil_every=4, check=check)
+    self.assert_request_spacing(requests)
+
+  def test_solo_unanswered_clutch_observes_backoff(self):
+    reader = temperature.EngineTemperatureReader(engine_enabled=False, clutch_enabled=True)
+    requests, samples = simulate_reader(reader, seconds=60, answers=set())
+    self.assertEqual(samples["clutch1"], [])
+    stamps = requests["clutch"]
+    self.assertLess(len(stamps), 30)
+    self.assertGreater(stamps[-1] - stamps[-2], 4.0)
+    self.assert_request_spacing(requests)
+
+  def test_missing_oil_does_not_monopolize_retries_ahead_of_working_boost(self):
+    def check(now, readings):
+      if now > 6.0:
+        self.assertTrue(readings["boostValid"])
+        self.assertEqual(readings["gear"], 1.0)
+
+    reader = temperature.EngineTemperatureReader(engine_enabled=True, clutch_enabled=True, boost_enabled=True)
+    answers = {temperature.CLUTCH_REQUEST, temperature.PRESSURE_REQUEST, temperature.BAROMETER_REQUEST}
+    requests, samples = simulate_reader(reader, answers=answers, check=check)
+    self.assertEqual(samples["oil"], [])
+    self.assertGreater(len(samples["boost"]), 90)
+    self.assert_request_spacing(requests)
+
+
 def clutch_payload(gear=1, next_gear=1, engine=800.0, shaft1=0.0, shaft2=0.0, slip1=0.0, slip2=0.0):
   """The recorded fixture with its mapped fields replaced, offsets written once."""
   payload = bytearray(CLUTCH_PAYLOAD)
@@ -724,6 +820,35 @@ class TestClutchState(unittest.TestCase):
     for previous in (temperature.ENGAGED, temperature.SLIPPING):
       inside_band = clutch_sample(gear=1, shaft1=700.0, slip1=150.0)  # Between the two thresholds.
       self.assertEqual(temperature.classify_clutch(1, inside_band, previous), previous)
+
+  def test_startup_or_launch_in_deadband_does_not_stay_unknown_or_disengaged(self):
+    for clutch in (1, 2):
+      for previous in (temperature.UNKNOWN, temperature.DISENGAGED):
+        with self.subTest(clutch=clutch, previous=previous):
+          sample = clutch_sample(gear=clutch, shaft1=700.0, shaft2=700.0, slip1=200.0, slip2=200.0)
+          self.assertEqual(temperature.classify_clutch(clutch, sample, previous), temperature.ENGAGED)
+    tracker = temperature.ClutchStateTracker()
+    self.assertEqual(tracker.update(0.0, clutch_sample(gear=1))[0], temperature.DISENGAGED)
+    for index in range(1, 5):
+      self.assertEqual(tracker.update(index * 0.24, clutch_sample(gear=1, shaft1=700.0, slip1=200.0))[0],
+                       temperature.ENGAGED)
+
+  def test_gear_change_into_deadband_does_not_keep_preselected_state(self):
+    tracker = temperature.ClutchStateTracker()
+    first = clutch_sample(gear=1, shaft1=700.0, shaft2=700.0, slip1=200.0, slip2=200.0)
+    second = dict(first, gear=2.0)
+    self.assertEqual(tracker.update(0.0, first), (temperature.ENGAGED, temperature.DISENGAGED))
+    self.assertEqual(tracker.update(0.48, second), (temperature.DISENGAGED, temperature.ENGAGED))
+
+  def test_stale_samples_cannot_complete_slip_dwell_or_revive_latched_state(self):
+    slipping = clutch_sample(gear=1, shaft1=700.0, slip1=400.0)
+    tracker = temperature.ClutchStateTracker()
+    self.assertEqual(tracker.update(0.0, slipping)[0], temperature.UNKNOWN)
+    self.assertEqual(tracker.update(1.5, slipping)[0], temperature.UNKNOWN)
+    self.assertEqual(tracker.update(2.0, slipping)[0], temperature.SLIPPING)
+    # A recovering in-band sample immediately establishes a new state, without releasing stale slip.
+    in_band = clutch_sample(gear=1, shaft1=700.0, slip1=200.0)
+    self.assertEqual(tracker.update(3.5, in_band)[0], temperature.ENGAGED)
 
   def latch_time(self, spacing):
     tracker = temperature.ClutchStateTracker()
@@ -850,17 +975,30 @@ class TestClutchState(unittest.TestCase):
     self.assertEqual((readings["clutch1State"], readings["clutch2State"]),
                      (temperature.DISENGAGED, temperature.ENGAGED))
 
-  def test_raw_values_and_states_expire_with_their_payload(self):
+  def test_raw_values_and_states_expire_before_temperatures(self):
     readings = self.poll_states([clutch_payload(gear=1, shaft1=700.0, slip1=40.0)])[0]
     self.assertEqual(readings["gear"], 1.0)
     self.assertEqual(readings["engineRpm"], 800.0)
     self.assertEqual(readings["inputShaft1Rpm"], 700.0)
     self.assertEqual(readings["clutch1SlipRpm"], 40.0)
     self.assertEqual(readings["clutch1State"], temperature.ENGAGED)
-    readings = self.reader.readings(0.02 + temperature.STALE_AFTER)
+    self.assertEqual(self.reader.readings(1.51)["gear"], 1.0)
+    readings = self.reader.readings(1.52)
     self.assertEqual((readings["clutch1State"], readings["clutch2State"]),
                      (temperature.UNKNOWN, temperature.UNKNOWN))
     self.assertEqual(readings["gear"] + readings["engineRpm"] + readings["inputShaft1Rpm"], 0.0)
+    self.assertEqual(readings["clutch1SlipRpm"], 0.0)
+    self.assertTrue(readings["clutch1Valid"])
+    self.assertTrue(readings["clutch2Valid"])
+
+  def test_reader_recovery_requires_fresh_slip_evidence(self):
+    slipping = clutch_payload(gear=1, shaft1=700.0, slip1=400.0)
+    for start in (0.0, 2.0):
+      self.assertEqual(self.reader.update(start, []), [temperature.CLUTCH_REQUEST])
+      frames = clutch_frames(slipping)
+      self.reader.update(start + 0.02, frames[:1])
+      self.reader.update(start + 0.1, frames[1:])
+      self.assertEqual(self.reader.readings(start + 0.1)["clutch1State"], temperature.UNKNOWN)
 
   def test_a_garbled_reply_leaves_the_last_state_in_place(self):
     self.poll_states([clutch_payload(gear=1, shaft1=700.0, slip1=40.0)])

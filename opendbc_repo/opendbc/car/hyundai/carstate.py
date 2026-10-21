@@ -337,12 +337,18 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     if CP.flags & HyundaiFlags.CANFD:
       return self.get_can_parsers_canfd(CP)
 
+    optional_messages = [("TPMS11", float("nan"))]
+    if CP.carFingerprint == CAR.HYUNDAI_ELANTRA_GT_I30 and not CP.flags & HyundaiFlags.TCU_GEARS:
+      # Display-only numeric gear on the recorded Elantra GT. Cars that use
+      # TCU12 for their control gearShifter retain its required alive check.
+      optional_messages.append(("TCU12", float("nan")))
+
     return {
       # TPMS11 is a body-controller broadcast on this bus, so the tire pressures
       # need no diagnostic request. Its frequency is unknown here and it is
       # absent on some vehicles, so it is subscribed with the alive check off:
       # interfaces.py folds every parser's can_valid into carState.canValid, and
       # a message that never arrives would fault the car as a CAN error.
-      Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], [("TPMS11", float("nan"))], 0),
+      Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], optional_messages, 0),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2),
     }
