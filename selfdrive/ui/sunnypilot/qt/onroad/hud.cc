@@ -203,8 +203,11 @@ void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) 
   const bool compact = row_count == 5;
   const int card_width = std::min(320, surface_rect.width() / 2 - 150);
   const int row_height = compact ? 106 : 128;
+  // The set-speed card is placed absolutely at y 45 and is 204 px tall, so its bottom edge lands
+  // at 248. This card used to start at 242 and paint over that border; 30 px below the button row
+  // leaves 3 px of clear space between the two instead.
   const QRect card(surface_rect.left() + UI_BORDER_SIZE,
-                   surface_rect.top() + UI_BORDER_SIZE + btn_size + 20, card_width, row_count * row_height + 4);
+                   surface_rect.top() + UI_BORDER_SIZE + btn_size + 30, card_width, row_count * row_height + 4);
   // The driver monitoring icon sits in this column's lower corner, so a card that
   // would reach it is dropped rather than overlapped.
   if (card.bottom() + 20 >= surface_rect.bottom() + 1 - UI_BORDER_SIZE - btn_size) return;
