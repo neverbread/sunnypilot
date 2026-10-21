@@ -6,6 +6,20 @@ STOPPED_TIME = 2.0
 CONFIRM_TIME = 0.3
 LEAD_STOPPED_TIME = 1.0
 LEAD_DEPART_DISTANCE = 1.0
+# A lead counts as stopped up to this relative speed, and as departing above this one. The
+# overlap between the two is deliberate: a slow creep should still be able to trigger, which a
+# single shared threshold could not do.
+LEAD_STOPPED_SPEED = 0.3
+LEAD_DEPART_SPEED = 0.15
+# Range drift tolerated before the anchor and the stationary clock restart. Wider than a lead
+# can physically move while it still passes the stopped test, so sensor jitter cannot unarm it.
+LEAD_REANCHOR_DISTANCE = 1.0
+# Past this a range jump is a different object, not a jittered measurement, even for a tracker
+# that has already seen the lead sit still. Two vision-only leads share one identity, so this
+# bound and the stationary evidence already gathered are all that tells them apart.
+LEAD_JUMP_LIMIT = 2.0
+# How long a reminder suppresses the next one when rearming by cooldown.
+REARM_COOLDOWN = 6.0
 GREEN_LIGHT_STOP_DISTANCE = 10.0
 GREEN_LIGHT_GO_DISTANCE = 30.0
 
@@ -15,8 +29,11 @@ LEAD_BOX_NONE, LEAD_BOX_ACQUIRING, LEAD_BOX_ARMED, LEAD_BOX_DEPARTING = 0, 1, 2,
 
 
 class E2EAlertsHelper:
-  """One reminder per stop, based on a departing lead or the model's stop-to-go prediction.
+  """Reminders for a departing lead or the model's stop-to-go prediction, while the car is stopped.
 
+  rearm_instant matches the LeadDepartInstantRearm param, which is on: the same stop can remind
+  again once the lead goes stationary and departs again. Off, a reminder suppresses the next one
+  for REARM_COOLDOWN, and the car moving clears that sooner.
   The model trajectory is a driving prediction, not a traffic-light color detector.
   Timestamps are monotonic seconds; repeated messages never advance confirmation timers.
   """
@@ -26,7 +43,7 @@ class E2EAlertsHelper:
     self.lead_depart_alert = False
     self.lead_box_state = LEAD_BOX_NONE
     self._last_time = None
-    self._alerted = False
+    self._alerted_until = None
     self._saw_lead = False
     self._clear_tracking()
 
@@ -59,21 +76,31 @@ class E2EAlertsHelper:
       return False
 
     identity = (lead.radar, lead.radarTrackId)
-    discontinuity = self._lead_identity != identity
+    range_delta, range_jump = 0.0, False
     if self._lead_previous_distance is not None:
+      range_delta = abs(lead.dRel - self._lead_previous_distance)
       # Reject implausible range jumps (including switches between vision-only leads).
-      max_change = 0.5 + 10.0 * (timestamp - self._lead_previous_time)
-      discontinuity |= abs(lead.dRel - self._lead_previous_distance) > max_change
-    if discontinuity:
+      range_jump = range_delta > 0.5 + 10.0 * (timestamp - self._lead_previous_time)
+    if self._lead_identity != identity or range_delta > LEAD_JUMP_LIMIT:
       self._clear_lead()
+    elif range_jump:
+      if not self._lead_armed:
+        self._clear_lead()
+      else:
+        # Armed on a lead that has already proved it is stationary: treat the jump as sensor
+        # noise rather than a new object, since dropping the tracker here is what makes a
+        # close, partially occluded lead never get its reminder. Re-anchor so the jump cannot
+        # read as a departure, and discard partial confirmation for the same reason.
+        self._lead_distance = lead.dRel
+        self._lead_depart_since = None
 
     self._lead_identity = identity
     self._lead_previous_distance = lead.dRel
     self._lead_previous_time = timestamp
 
     if not self._lead_armed:
-      if abs(lead.vRel) <= 0.3 and lead.dRel < 15.0:
-        if self._lead_stopped_since is None or abs(lead.dRel - self._lead_distance) > 0.5:
+      if abs(lead.vRel) <= LEAD_STOPPED_SPEED and lead.dRel < 15.0:
+        if self._lead_stopped_since is None or abs(lead.dRel - self._lead_distance) > LEAD_REANCHOR_DISTANCE:
           self._lead_stopped_since = timestamp
           self._lead_distance = lead.dRel
         self._lead_armed = stopped_long_enough and timestamp - self._lead_stopped_since >= LEAD_STOPPED_TIME
@@ -82,7 +109,7 @@ class E2EAlertsHelper:
         self._lead_distance = None
       return False
 
-    if lead.dRel - self._lead_distance > LEAD_DEPART_DISTANCE and lead.vRel > 0.3:
+    if lead.dRel - self._lead_distance > LEAD_DEPART_DISTANCE and lead.vRel > LEAD_DEPART_SPEED:
       if self._lead_depart_since is None:
         self._lead_depart_since = timestamp
       return timestamp - self._lead_depart_since >= CONFIRM_TIME
@@ -95,13 +122,18 @@ class E2EAlertsHelper:
 
     Reads the tracker's own state rather than recomputing anything, so the box cannot drift
     out of step with the chime. DEPARTING is published on the one frame the departure confirms;
-    the next frame's _alerted latch clears the tracker, and the overlay holds its own fade.
+    the suppression that follows drops the tracker in both rearm modes, and the overlay holds
+    its own fade. In instant mode the tracker then re-acquires the same lead within a second,
+    which the overlay shows as the outline coming back.
     """
     if self.lead_depart_alert:
       return LEAD_BOX_DEPARTING
     if self._lead_armed:
       return LEAD_BOX_ARMED
-    if self._lead_identity is not None:
+    # The stopped evidence, not merely an identity: a lead already pulling away is tracked, but
+    # the reminder is waiting on nothing, and an outline around a receding car reads as a promise
+    # it will not keep. This also keeps the overlay the same in both rearm modes.
+    if self._lead_stopped_since is not None:
       return LEAD_BOX_ACQUIRING
     return LEAD_BOX_NONE
 
@@ -130,7 +162,7 @@ class E2EAlertsHelper:
     return False
 
   def update(self, *, now, CS, lead, model_x, model_time, radar_time, valid,
-             lead_enabled, green_light_enabled, allowed=True):
+             lead_enabled, green_light_enabled, allowed=True, rearm_instant=True):
     self.green_light_alert = False
     self.lead_depart_alert = False
     # Every early return below leaves the overlay with nothing to draw.
@@ -139,12 +171,13 @@ class E2EAlertsHelper:
     if not math.isfinite(now) or (self._last_time is not None and now < self._last_time):
       self._clear_tracking()
       self._last_time = None
+      self._alerted_until = None
       return False
     self._last_time = now
 
     moving = math.isfinite(CS.vEgo) and abs(CS.vEgo) > 0.1
     if moving:
-      self._alerted = False
+      self._alerted_until = None
       self._saw_lead = False
 
     fresh = all(math.isfinite(t) and 0 <= now - t <= MAX_DATA_AGE for t in (model_time, radar_time))
@@ -155,7 +188,12 @@ class E2EAlertsHelper:
       return False
 
     self._saw_lead |= lead.status
-    if self._alerted or not (lead_enabled or green_light_enabled):
+    if self._alerted_until is not None and now < self._alerted_until:
+      # A reminder is still being suppressed. Evidence is discarded meanwhile so that the next
+      # reminder has to be earned from scratch, rather than firing the moment the block ends.
+      self._clear_tracking()
+      return False
+    if not (lead_enabled or green_light_enabled):
       self._clear_tracking()
       return False
 
@@ -183,5 +221,16 @@ class E2EAlertsHelper:
 
     self._last_model_time = model_time
     self._last_radar_time = radar_time
-    self._alerted = self.lead_depart_alert or self.green_light_alert
-    return self._alerted
+    fired = self.lead_depart_alert or self.green_light_alert
+    if fired:
+      if rearm_instant:
+        # Drop both trackers' evidence but keep the ego-stopped clock, which is already satisfied,
+        # so the next reminder needs only the lead to sit still for LEAD_STOPPED_TIME again. Both
+        # trackers clear: a green light that is still showing would otherwise refire every frame.
+        self._clear_lead()
+        self._clear_green_light()
+        self._alerted_until = now
+      else:
+        self._clear_tracking()
+        self._alerted_until = now + REARM_COOLDOWN
+    return fired

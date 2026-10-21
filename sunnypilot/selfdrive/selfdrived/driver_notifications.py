@@ -26,6 +26,9 @@ class DriverNotifications:
     self.speed_enabled = self.params.get_bool("SteeringSpeedChime")
     self.lead_enabled = self.params.get_bool("LeadDepartAlert")
     self.green_light_enabled = self.params.get_bool("GreenLightAlert")
+    # Suppression is shared by both stop reminders, so this speeds up the green light reminder
+    # as well. It only ever fires with no lead in frame, where the lead chime cannot compete.
+    self.lead_rearm_instant = self.params.get_bool("LeadDepartInstantRearm")
 
   @property
   def lead_box_state(self):
@@ -56,6 +59,6 @@ class DriverNotifications:
                               radar_time=sm.recv_frame['radarState'] * DT_CTRL,
                               valid=valid_car and sm.all_checks(['modelV2', 'radarState']) and radar_valid,
                               lead_enabled=self.lead_enabled, green_light_enabled=self.green_light_enabled,
-                              allowed=allowed):
+                              allowed=allowed, rearm_instant=self.lead_rearm_instant):
       events.append(EventNameSP.trafficReadyReminder)
     return events

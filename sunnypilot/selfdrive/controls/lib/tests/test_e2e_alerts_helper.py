@@ -37,12 +37,14 @@ class TestE2EAlertsHelper(unittest.TestCase):
     self.model_x = [40.0 * i / 32 for i in range(33)]
     return [self.update(**kwargs) for _ in range(40)]
 
-  def test_lead_departure_once_per_stop(self):
-    self.wait_at_stop()
-    self.assertEqual(sum(self.depart()), 1)
+  def test_cooldown_rearm_gives_one_chime_per_stop(self):
+    # The rearm mode the toggle turns off: without a cooldown the same rolling lead would keep
+    # chiming, so this pins down what the off side of the toggle does.
+    self.wait_at_stop(rearm_instant=False)
+    self.assertEqual(sum(self.depart(rearm_instant=False)), 1)
     self.lead.vRel = 0.0
-    self.wait_at_stop()
-    self.assertFalse(any(self.depart()))
+    self.wait_at_stop(rearm_instant=False)
+    self.assertFalse(any(self.depart(rearm_instant=False)))
 
   def test_rearms_after_driving_to_next_stop(self):
     self.wait_at_stop()
@@ -120,6 +122,50 @@ class TestE2EAlertsHelper(unittest.TestCase):
         self.wait_at_stop(**kwargs)
         self.assertFalse(any(self.depart(**kwargs)))
 
+  def test_slow_creep_in_traffic_triggers(self):
+    # A lead creeping at walking pace is a departure in stop and go traffic, which a speed gate
+    # above its own creeping speed would miss entirely.
+    self.wait_at_stop()
+    self.lead.vRel = 0.2
+    results = []
+    for _ in range(120):
+      self.lead.dRel += 0.01
+      results.append(self.update())
+    self.assertEqual(sum(results), 1)
+
+  def test_armed_lead_survives_a_measurement_jump(self):
+    # A close, partly occluded lead's range jumps by more than it can move. Dropping the tracker
+    # there is what leaves the closest lead without a reminder, so it re-anchors instead.
+    self.wait_at_stop()
+    self.assertEqual(self.helper.lead_box_state, LEAD_BOX_ARMED)
+    self.lead.dRel += 1.5
+    for _ in range(20):
+      self.assertFalse(self.update())
+      self.assertEqual(self.helper.lead_box_state, LEAD_BOX_ARMED)
+    self.assertEqual(sum(self.depart()), 1)
+
+  def test_instant_rearm_repeats_within_one_stop(self):
+    self.wait_at_stop()
+    self.assertEqual(sum(self.depart(rearm_instant=True)), 1)
+    self.lead.vRel, self.lead.dRel = 0.0, 6.0
+    self.wait_at_stop(rearm_instant=True)
+    self.assertEqual(sum(self.depart(rearm_instant=True)), 1)
+
+  def test_instant_rearm_still_requires_the_lead_to_stop_again(self):
+    self.wait_at_stop()
+    self.assertEqual(sum(self.depart(rearm_instant=True)), 1)
+    results = []
+    for _ in range(120):
+      self.lead.dRel += 0.075
+      results.append(self.update(rearm_instant=True))
+    self.assertEqual(sum(results), 0)
+
+  def test_instant_rearm_does_not_refire_a_model_still_predicting_go(self):
+    self.lead.status = False
+    self.wait_at_stop()
+    self.assertEqual(sum(self.model_go(rearm_instant=True)), 1)
+    self.assertEqual(sum(self.update(rearm_instant=True) for _ in range(60)), 0)
+
   def test_lead_box_none_without_a_lead(self):
     self.lead.status = False
     for _ in range(60):
@@ -155,18 +201,18 @@ class TestE2EAlertsHelper(unittest.TestCase):
     self.assertEqual(states[alerts.index(True)], LEAD_BOX_DEPARTING)
     self.assertEqual(set(states[states.index(LEAD_BOX_DEPARTING) + 1:]), {LEAD_BOX_NONE})
 
-  def test_lead_box_stays_none_after_departing_until_the_car_moves(self):
-    self.wait_at_stop()
-    self.assertEqual(sum(self.depart()), 1)
+  def test_lead_box_stays_none_during_cooldown_until_the_car_moves(self):
+    self.wait_at_stop(rearm_instant=False)
+    self.assertEqual(sum(self.depart(rearm_instant=False)), 1)
     for _ in range(60):
-      self.assertFalse(self.update())
+      self.assertFalse(self.update(rearm_instant=False))
       self.assertEqual(self.helper.lead_box_state, LEAD_BOX_NONE)
     self.CS.standstill, self.CS.vEgo = False, 2.0
-    self.assertFalse(self.update())
+    self.assertFalse(self.update(rearm_instant=False))
     self.assertEqual(self.helper.lead_box_state, LEAD_BOX_NONE)
     self.CS.standstill, self.CS.vEgo = True, 0.0
     self.lead.dRel, self.lead.vRel = 6.0, 0.0
-    self.wait_at_stop()
+    self.wait_at_stop(rearm_instant=False)
     self.assertEqual(self.helper.lead_box_state, LEAD_BOX_ARMED)
 
   def test_lead_box_holds_between_radar_frames(self):
@@ -200,6 +246,19 @@ class TestE2EAlertsHelper(unittest.TestCase):
     self.assertNotIn(LEAD_BOX_ARMED, states[:20])
     self.assertEqual(states[-1], LEAD_BOX_ARMED)
     self.assertEqual(set(states[states.index(LEAD_BOX_ARMED):]), {LEAD_BOX_ARMED})
+
+  def test_lead_box_rearms_within_one_stop_when_instant(self):
+    # The outline is the tracker's own view, so re-arming shows it again on the same lead rather
+    # than leaving the second creep unmarked.
+    self.wait_at_stop()
+    self.assertEqual(sum(self.depart(rearm_instant=True)), 1)
+    self.lead.vRel, self.lead.dRel = 0.0, 6.0
+    states = []
+    for _ in range(60):
+      self.assertFalse(self.update(rearm_instant=True))
+      states.append(self.helper.lead_box_state)
+    self.assertIn(LEAD_BOX_ACQUIRING, states)
+    self.assertEqual(states[-1], LEAD_BOX_ARMED)
 
   def test_green_light_requires_stopped_to_go_model_transition(self):
     self.lead.status = False
@@ -241,18 +300,18 @@ class TestE2EAlertsHelper(unittest.TestCase):
     for _ in range(4):
       self.assertFalse(self.update(model_x=[40.0] * 33))
 
-  def test_invalid_data_gas_or_toggle_does_not_repeat_chime(self):
+  def test_invalid_data_gas_or_toggle_does_not_repeat_chime_within_cooldown(self):
     self.lead.status = False
-    self.wait_at_stop()
-    self.assertEqual(sum(self.model_go()), 1)
-    self.assertFalse(self.update(valid=False))
+    self.wait_at_stop(rearm_instant=False)
+    self.assertEqual(sum(self.model_go(rearm_instant=False)), 1)
+    self.assertFalse(self.update(valid=False, rearm_instant=False))
     self.CS.gasPressed = True
-    self.assertFalse(self.update())
+    self.assertFalse(self.update(rearm_instant=False))
     self.CS.gasPressed = False
-    self.assertFalse(self.update(lead_enabled=False, green_light_enabled=False))
+    self.assertFalse(self.update(lead_enabled=False, green_light_enabled=False, rearm_instant=False))
     self.model_x = [5.0] * 33
-    self.wait_at_stop()
-    self.assertFalse(any(self.model_go()))
+    self.wait_at_stop(rearm_instant=False)
+    self.assertFalse(any(self.model_go(rearm_instant=False)))
 
 
 if __name__ == '__main__':

@@ -164,6 +164,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"BlindspotLaneHighlight", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"BrakingStatus", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"LeadDepartAlert", {PERSISTENT | BACKUP, BOOL, "1"}},
+    {"LeadDepartInstantRearm", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"GreenLightAlert", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"DisengageLateralOnCancel", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"SteeringSpeedChime", {PERSISTENT | BACKUP, BOOL, "1"}},

@@ -39,7 +39,9 @@ class TestDriverNotifications(unittest.TestCase):
     self.engaged = False
     self.mads_enabled = False
     self.car_state_fresh = True
-    self.toggles = dict(SteeringSpeedChime=True, LeadDepartAlert=True, GreenLightAlert=True)
+    # Matches the shipped defaults, so the suite exercises the rearm mode cars actually run.
+    self.toggles = dict(SteeringSpeedChime=True, LeadDepartAlert=True, GreenLightAlert=True,
+                        LeadDepartInstantRearm=True)
     params = SimpleNamespace(get_bool=lambda key: self.toggles.get(key, False))
     self.notifications = DriverNotifications(params)
     self.lead = SimpleNamespace(status=True, dRel=6.0, vRel=0.0, modelProb=0.99, radar=True, radarTrackId=1)
@@ -139,6 +141,17 @@ class TestDriverNotifications(unittest.TestCase):
         self.wait_at_stop()
         self.assertEqual(self.lead_departure(), [EventName.trafficReadyReminder])
         self.assertFalse(self.engaged)
+
+  def test_rearm_toggle_decides_whether_one_stop_chimes_twice(self):
+    for instant in (False, True):
+      with self.subTest(instant=instant):
+        self.setUp()
+        self.toggles['LeadDepartInstantRearm'] = instant
+        self.wait_at_stop()
+        self.assertEqual(self.lead_departure(), [EventName.trafficReadyReminder])
+        self.lead.vRel, self.lead.dRel = 0.0, 6.0
+        self.wait_at_stop()
+        self.assertEqual(self.lead_departure(), [EventName.trafficReadyReminder] if instant else [])
 
   def test_model_stop_to_go_without_cruise(self):
     self.lead.status = False

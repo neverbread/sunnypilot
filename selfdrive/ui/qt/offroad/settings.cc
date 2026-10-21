@@ -76,6 +76,13 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       false,
     },
     {
+      "LeadDepartInstantRearm",
+      tr("Instant Lead Chime Rearm"),
+      tr("Chime again within the same stop as soon as the vehicle ahead stops and pulls away a second time, which is what stop and go traffic needs. Turn this off for a six-second pause between chimes, which is quieter in heavy queues."),
+      "../assets/icons/warning.png",
+      false,
+    },
+    {
       "GreenLightAlert",
       tr("Green Light Reminder"),
       tr("While stopped without a lead vehicle, play a chime when the driving model changes from stopping to proceeding. This is a model-based reminder, not traffic-light color detection. Check the light and road before proceeding."),
