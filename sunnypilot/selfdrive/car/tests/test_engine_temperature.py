@@ -789,6 +789,20 @@ class TestClutchState(unittest.TestCase):
                               temperature.SLIPPING, temperature.SLIPPING, temperature.ENGAGED,
                               temperature.ENGAGED])
 
+  def test_newest_reading_at_moves_on_a_reply_not_on_a_request(self):
+    # What the daemon publishes on. It has to move when a value lands, not when one is asked for,
+    # or publishing on it would push the pre-reply snapshot out faster instead of the fresh one
+    # sooner; update()'s return value is the request feed and must not be used for this.
+    slipping = clutch_payload(gear=1, shaft1=700.0, slip1=400.0)
+    before = self.reader.newest_reading_at
+    self.assertEqual(self.reader.update(0.0, []), [temperature.CLUTCH_REQUEST])
+    self.assertEqual(self.reader.newest_reading_at, before)  # asked for one, nothing back yet
+    frames = clutch_frames(slipping)
+    self.assertEqual(self.reader.update(0.01, frames[:1]), [temperature.CLUTCH_FLOW_CONTROL])
+    self.assertEqual(self.reader.newest_reading_at, before)  # the first frame of several is not a value
+    self.assertEqual(self.reader.update(0.02, frames[1:]), [])
+    self.assertGreater(self.reader.newest_reading_at, before)
+
   def test_release_dwell_clears_on_the_third_sample_at_the_real_spacing(self):
     # At poll_states' default 0.5 s spacing this cannot tell 0.6 from 1.0, both clearing on the
     # third non-evidence sample. At the 0.48 s the scheduler produces, 0.45 clears on the second,

@@ -236,6 +236,12 @@ class EngineTemperatureReader:
     """Timestamp boundary for the caller to discard pre-request CAN events."""
     return self._last_request if self._pending is not None else None
 
+  @property
+  def newest_reading_at(self) -> float:
+    """When the last value actually landed, so the caller publishes on a reply rather than on a
+    timer. Note this is not the same as being asked for one: update() returns the requests."""
+    return max((stamp for _, stamp in self._values.values()), default=float("-inf"))
+
   def reset(self) -> None:
     """Drop all transport and cached readings when disabled or leaving a drive."""
     self._values: dict[str, tuple[float, float]] = {}

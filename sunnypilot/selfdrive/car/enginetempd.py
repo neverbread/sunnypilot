@@ -16,6 +16,11 @@ REQUEST_KINDS = {
   PRESSURE_REQUEST: "pressure", BAROMETER_REQUEST: "barometer",
 }
 OBD_PANDA_TYPES = {"blackPanda", "uno", "dos", "redPanda", "redPandaV2", "tres"}
+# A floor, not the cadence: the loop also publishes the moment a diagnostic reply lands, so a value
+# reaches the HUD without waiting out a timer. Do not raise the 2 Hz declared in cereal/services.py
+# to match the resulting rate: the C++ UI derives its alive window as 10/freq, and 2 Hz is all this
+# daemon guarantees when the diagnostic bus is quiet or the displays are off.
+PUBLICATION_FLOOR = 0.5
 
 
 def supported_vehicle_configuration(CP) -> bool:
@@ -96,6 +101,7 @@ def main():
   pm = messaging.PubMaster(["engineTemperature", "engineTemperatureRequest"])
   rk = Ratekeeper(50, print_delay_threshold=None)
   next_publication = 0.0
+  published_landing = float("-inf")
 
   while True:
     sm.update(0)
@@ -117,12 +123,19 @@ def main():
       request.engineTemperatureRequest.kind = kind
       pm.send("engineTemperatureRequest", request)
 
-    if now >= next_publication:
+    # Publish on a landing as well as on the floor: the reader runs at 50 Hz, so a value is held for
+    # up to half a second before the HUD ever sees it. The floor is advanced by the event publish too,
+    # because two independent timers would publish near 6 Hz and emit two messages with the same
+    # logMonoTime. Trigger on the stamp, not on the request feed and not on the readings changing:
+    # coolant is whole degrees and oil steps by 0.75, so the dict repeats for most replies.
+    landed = session.reader.newest_reading_at
+    if now >= next_publication or landed > published_landing:
       msg = messaging.new_message("engineTemperature", valid=True)
       msg.logMonoTime = int(now * 1e9)
       msg.engineTemperature = dict(session.reader.readings(now), supported=supported)
       pm.send("engineTemperature", msg)
-      next_publication = now + 0.5
+      next_publication = now + PUBLICATION_FLOOR
+      published_landing = landed
     rk.keep_time()
 
 
