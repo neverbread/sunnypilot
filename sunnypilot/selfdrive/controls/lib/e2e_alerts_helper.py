@@ -5,12 +5,14 @@ MAX_DATA_AGE = 0.25
 STOPPED_TIME = 2.0
 CONFIRM_TIME = 0.3
 LEAD_STOPPED_TIME = 1.0
-LEAD_DEPART_DISTANCE = 1.0
 # A lead counts as stopped up to this relative speed, and as departing above this one. The
 # overlap between the two is deliberate: a slow creep should still be able to trigger, which a
 # single shared threshold could not do.
 LEAD_STOPPED_SPEED = 0.3
 LEAD_DEPART_SPEED = 0.15
+# After a reminder, require a quieter stop before rearming. Otherwise continuous creep in the
+# overlapping acquisition/departure band would repeatedly count as stopping and pulling away.
+LEAD_REARM_STOPPED_SPEED = 0.1
 # Range drift tolerated before the anchor and the stationary clock restart. Wider than a lead
 # can physically move while it still passes the stopped test, so sensor jitter cannot unarm it.
 LEAD_REANCHOR_DISTANCE = 1.0
@@ -45,6 +47,7 @@ class E2EAlertsHelper:
     self._last_time = None
     self._alerted_until = None
     self._saw_lead = False
+    self._lead_needs_restop = False
     self._clear_tracking()
 
   def _clear_lead(self):
@@ -77,6 +80,7 @@ class E2EAlertsHelper:
 
     identity = (lead.radar, lead.radarTrackId)
     range_delta, range_jump = 0.0, False
+    reject_motion = False
     if self._lead_previous_distance is not None:
       range_delta = abs(lead.dRel - self._lead_previous_distance)
       # Reject implausible range jumps (including switches between vision-only leads).
@@ -93,23 +97,33 @@ class E2EAlertsHelper:
         # read as a departure, and discard partial confirmation for the same reason.
         self._lead_distance = lead.dRel
         self._lead_depart_since = None
+        reject_motion = True
 
     self._lead_identity = identity
     self._lead_previous_distance = lead.dRel
     self._lead_previous_time = timestamp
 
+    if reject_motion:
+      # A discontinuous range can also produce a spurious velocity. Start gathering fresh
+      # motion evidence on the next sample, rather than counting the jump as a departure.
+      return False
+
     if not self._lead_armed:
-      if abs(lead.vRel) <= LEAD_STOPPED_SPEED and lead.dRel < 15.0:
+      stopped_speed = LEAD_REARM_STOPPED_SPEED if self._lead_needs_restop else LEAD_STOPPED_SPEED
+      if abs(lead.vRel) <= stopped_speed and lead.dRel < 15.0:
         if self._lead_stopped_since is None or abs(lead.dRel - self._lead_distance) > LEAD_REANCHOR_DISTANCE:
           self._lead_stopped_since = timestamp
           self._lead_distance = lead.dRel
         self._lead_armed = stopped_long_enough and timestamp - self._lead_stopped_since >= LEAD_STOPPED_TIME
+        if self._lead_armed:
+          self._lead_needs_restop = False
       else:
         self._lead_stopped_since = None
         self._lead_distance = None
       return False
 
-    if lead.dRel - self._lead_distance > LEAD_DEPART_DISTANCE and lead.vRel > LEAD_DEPART_SPEED:
+    # Confirm forward motion without waiting for the lead to travel a fixed distance.
+    if lead.vRel > LEAD_DEPART_SPEED:
       if self._lead_depart_since is None:
         self._lead_depart_since = timestamp
       return timestamp - self._lead_depart_since >= CONFIRM_TIME
@@ -179,6 +193,7 @@ class E2EAlertsHelper:
     if moving:
       self._alerted_until = None
       self._saw_lead = False
+      self._lead_needs_restop = False
 
     fresh = all(math.isfinite(t) and 0 <= now - t <= MAX_DATA_AGE for t in (model_time, radar_time))
     if not allowed or not valid or not fresh or not CS.standstill or not math.isfinite(CS.vEgo) or moving or CS.gasPressed:
@@ -223,6 +238,8 @@ class E2EAlertsHelper:
     self._last_radar_time = radar_time
     fired = self.lead_depart_alert or self.green_light_alert
     if fired:
+      if self.lead_depart_alert:
+        self._lead_needs_restop = True
       if rearm_instant:
         # Drop both trackers' evidence but keep the ego-stopped clock, which is already satisfied,
         # so the next reminder needs only the lead to sit still for LEAD_STOPPED_TIME again. Both

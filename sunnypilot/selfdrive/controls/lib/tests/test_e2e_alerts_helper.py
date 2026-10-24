@@ -98,7 +98,7 @@ class TestE2EAlertsHelper(unittest.TestCase):
   def test_duplicate_messages_do_not_confirm_departure(self):
     self.wait_at_stop()
     self.lead.vRel = 1.5
-    for _ in range(16):
+    for _ in range(4):
       self.lead.dRel += 0.075
       self.assertFalse(self.update())
     frozen_time = self.now
@@ -132,6 +132,127 @@ class TestE2EAlertsHelper(unittest.TestCase):
       self.lead.dRel += 0.01
       results.append(self.update())
     self.assertEqual(sum(results), 1)
+
+  def test_forward_motion_chimes_before_one_meter(self):
+    for speed in (0.2, 1.5):
+      with self.subTest(speed=speed):
+        self.setUp()
+        self.wait_at_stop()
+        started, distance = self.now, self.lead.dRel
+        self.lead.vRel = speed
+        alerts = []
+        for _ in range(20):
+          self.lead.dRel += speed * 0.05
+          if self.update():
+            alerts.append((self.now - started, self.lead.dRel - distance))
+        self.assertEqual(len(alerts), 1)
+        elapsed, traveled = alerts[0]
+        self.assertGreaterEqual(elapsed, 0.3)
+        self.assertLess(elapsed, 0.5)
+        self.assertLess(traveled, 1.0)
+
+  def test_small_transient_or_reverse_velocity_does_not_chime(self):
+    self.wait_at_stop()
+    for speed in (0.0, 0.14, -0.2):
+      self.lead.vRel = speed
+      for _ in range(20):
+        self.lead.dRel += speed * 0.05
+        self.assertFalse(self.update())
+    for _ in range(4):
+      self.lead.vRel = 0.2
+      for _ in range(4):
+        self.lead.dRel += 0.01
+        self.assertFalse(self.update())
+      self.lead.vRel = 0.0
+      self.assertFalse(self.update())
+
+  def test_continuous_slow_creep_chimes_once_in_either_rearm_mode(self):
+    for instant in (False, True):
+      with self.subTest(instant=instant):
+        self.setUp()
+        self.wait_at_stop(rearm_instant=instant)
+        self.lead.vRel = 0.2
+        alerts = []
+        for _ in range(400):
+          self.lead.dRel += 0.01
+          alerts.append(self.update(rearm_instant=instant))
+        self.assertEqual(sum(alerts), 1)
+
+  def test_slow_creep_rearms_after_one_second_near_stationary(self):
+    self.wait_at_stop()
+    self.lead.vRel = 0.2
+    alerts = []
+    for _ in range(20):
+      self.lead.dRel += 0.01
+      alerts.append(self.update())
+    self.assertEqual(sum(alerts), 1)
+    self.lead.vRel = 0.0
+    for _ in range(22):
+      self.assertFalse(self.update())
+    self.assertEqual(self.helper.lead_box_state, LEAD_BOX_ARMED)
+    self.lead.vRel = 0.2
+    alerts = []
+    for _ in range(20):
+      self.lead.dRel += 0.01
+      alerts.append(self.update())
+    self.assertEqual(sum(alerts), 1)
+
+  def test_brief_velocity_dips_do_not_rearm_continuous_creep(self):
+    self.wait_at_stop()
+    self.lead.vRel = 0.2
+    alerts = []
+    for _ in range(20):
+      self.lead.dRel += 0.01
+      alerts.append(self.update())
+    self.assertEqual(sum(alerts), 1)
+    for _ in range(10):
+      for speed, ticks in ((0.05, 10), (0.2, 20)):
+        self.lead.vRel = speed
+        for _ in range(ticks):
+          self.lead.dRel += speed * 0.05
+          self.assertFalse(self.update())
+
+  def test_data_loss_track_changes_and_toggle_do_not_repeat_creep_chime(self):
+    for interruption in ('data', 'lead', 'identity', 'toggle'):
+      with self.subTest(interruption=interruption):
+        self.setUp()
+        self.wait_at_stop()
+        self.lead.vRel = 0.2
+        alerts = []
+        for _ in range(20):
+          self.lead.dRel += 0.01
+          alerts.append(self.update())
+        self.assertEqual(sum(alerts), 1)
+        if interruption == 'data':
+          self.assertFalse(self.update(valid=False))
+        elif interruption == 'lead':
+          self.lead.status = False
+          self.assertFalse(self.update())
+          self.lead.status = True
+        elif interruption == 'identity':
+          self.lead.radarTrackId = 2
+        else:
+          self.assertFalse(self.update(lead_enabled=False))
+        for _ in range(200):
+          self.lead.dRel += 0.01
+          self.assertFalse(self.update())
+
+  def test_range_jump_discards_partial_motion_confirmation(self):
+    self.wait_at_stop()
+    self.lead.vRel = 1.5
+    for _ in range(4):
+      self.lead.dRel += 0.075
+      self.assertFalse(self.update())
+    self.lead.dRel += 1.5
+    self.assertFalse(self.update())
+    jumped = self.now
+    alerts = []
+    for _ in range(15):
+      self.lead.dRel += 0.075
+      if self.update():
+        alerts.append(self.now - jumped)
+    self.assertEqual(len(alerts), 1)
+    self.assertGreaterEqual(alerts[0], 0.35 - 1e-9)
 
   def test_armed_lead_survives_a_measurement_jump(self):
     # A close, partly occluded lead's range jumps by more than it can move. Dropping the tracker
