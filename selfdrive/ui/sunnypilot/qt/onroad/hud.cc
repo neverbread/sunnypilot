@@ -213,15 +213,14 @@ void HudRendererSP::drawVehicleReadings(QPainter &p, const QRect &surface_rect) 
   // display in split camera views. Compact five rows to stay between the buttons.
   const bool compact = row_count == 5;
   const int card_width = std::min(320, surface_rect.width() / 2 - 150);
-  const int row_height = compact ? 106 : 128;
-  // The set-speed card is placed absolutely at y 45 and is 204 px tall, so its bottom edge lands
-  // at 248. This card used to start at 242 and paint over that border; 30 px below the button row
-  // leaves 3 px of clear space between the two instead.
-  const QRect card(surface_rect.left() + UI_BORDER_SIZE,
-                   surface_rect.top() + UI_BORDER_SIZE + btn_size + 30, card_width, row_count * row_height + 4);
-  // The driver monitoring icon sits in this column's lower corner, so a card that
-  // would reach it is dropped rather than overlapped.
-  if (card.bottom() + 20 >= surface_rect.bottom() + 1 - UI_BORDER_SIZE - btn_size) return;
+  // Clear the set-speed card's border above and reserve 20 px before driver monitoring below.
+  // Fit the camera surface, which is shorter than the screen after the onroad window's margins.
+  const int card_top = surface_rect.top() + UI_BORDER_SIZE + btn_size + 30;
+  const int card_bottom = surface_rect.bottom() + 1 - UI_BORDER_SIZE - btn_size - 20;
+  const int row_height = std::min(compact ? 106 : 128, (card_bottom - card_top - 4) / row_count);
+  // Preserve the existing label/value sizes; only hide on surfaces too short to contain them.
+  if (row_height < (compact ? 104 : 124)) return;
+  const QRect card(surface_rect.left() + UI_BORDER_SIZE, card_top, card_width, row_count * row_height + 4);
 
   p.save();
   p.setPen(Qt::NoPen);
